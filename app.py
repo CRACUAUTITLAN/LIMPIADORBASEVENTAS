@@ -119,7 +119,8 @@ col1, col2 = st.columns(2)
 with col1:
     file_sucio = st.file_uploader("1. Sube el Reporte descargado desde BPro (.xls)", type=["xls"])
 with col2:
-    file_actualizador = st.file_uploader("2. Sube el arichivo "CATALOGO DE PARTES (.xlsx)", type=["xlsx", "xls"])
+    # CORRECCIÓN AQUÍ: Usamos comillas simples afuera para poder usar comillas dobles adentro
+    file_actualizador = st.file_uploader('2. Sube el archivo "CATALOGO DE PARTES" (.xlsx)', type=["xlsx", "xls"])
 
 if st.button("PROCESAR CORREGIDO"):
     if file_sucio and file_actualizador:
