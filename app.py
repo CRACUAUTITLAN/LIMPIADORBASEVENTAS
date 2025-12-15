@@ -9,8 +9,8 @@ st.set_page_config(page_title="Limpieza Multi-Hoja Corregida", layout="wide")
 
 st.title("🛠️ Limpieza de Base de Datos (Fix Continuidad de Hojas)")
 st.markdown("""
-**Corrección Crítica:**
-Se ha habilitado la **Memoria Global**. Ahora, si un cliente empieza en la Hoja 1 y sus productos continúan en la Hoja 2, el programa recordará al cliente y no borrará los datos.
+**DESCRIPCION:**
+Este programa nos ayuda a realizar la limpieza de la base descargada desde BPro y actualizar la linea y la categoria del mismo.
 """)
 
 # --- FUNCIONES DE AYUDA ---
@@ -117,9 +117,9 @@ def process_excel_file(uploaded_file):
 # --- INTERFAZ ---
 col1, col2 = st.columns(2)
 with col1:
-    file_sucio = st.file_uploader("1. Sube el Reporte (.xls)", type=["xls"])
+    file_sucio = st.file_uploader("1. Sube el Reporte descargado desde BPro (.xls)", type=["xls"])
 with col2:
-    file_actualizador = st.file_uploader("2. Sube Categorías (.xlsx)", type=["xlsx", "xls"])
+    file_actualizador = st.file_uploader("2. Sube el arichivo "CATALOGO DE PARTES (.xlsx)", type=["xlsx", "xls"])
 
 if st.button("PROCESAR CORREGIDO"):
     if file_sucio and file_actualizador:
