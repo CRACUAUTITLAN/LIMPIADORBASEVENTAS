@@ -5,15 +5,18 @@ import io
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="Limpieza Multi-Hoja Corregida", layout="wide")
+st.set_page_config(page_title="Generador Base Power BI", layout="wide")
 
-st.title("🛠️ Limpieza de Base de Datos (Fix Continuidad de Hojas)")
+st.title("🏭 Generador de Base Maestra (Formato Power BI)")
 st.markdown("""
-**DESCRIPCION:**
-Este programa nos ayuda a realizar la limpieza de la base descargada desde BPro y actualizar la linea y la categoria del mismo.
+**Instrucciones:**
+Este programa transforma el reporte de BPro en el formato **EXACTO** que requiere el Dashboard de Ventas.
+1. Sube el reporte sucio (.xls).
+2. Sube el catálogo de partes (.xlsx).
+3. Selecciona el año y descarga.
 """)
 
-# --- FUNCIONES DE AYUDA ---
+# --- FUNCIONES DE LIMPIEZA ---
 
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
@@ -47,23 +50,18 @@ def safe_get(row, index, default=0):
     except IndexError: return default
 
 def process_excel_file(uploaded_file):
+    # Leer todas las hojas
     xls = pd.read_excel(uploaded_file, sheet_name=None, header=None, engine='xlrd')
     all_clean_rows = []
 
-    # --- CORRECCIÓN: VARIABLES GLOBALES (MEMORIA PERSISTENTE) ---
-    # Las declaramos FUERA del bucle de hojas para que la información 
-    # viaje de la Hoja 1 a la Hoja 2, Hoja 3, etc.
+    # Memoria Global (Entre hojas)
     current_client = None
     current_fecha = None
     current_tipo = None
     current_almacen = None
 
-    # Iterar sobre todas las hojas
     for sheet_name, df in xls.items():
         data = df.values.tolist()
-        
-        # NOTA: Ya no reseteamos las variables aquí. 
-        # Si la Hoja 2 es continuación de la Hoja 1, usará el último cliente visto.
         
         for i, row in enumerate(data):
             col_a = str(safe_get(row, 0, "")).strip()
@@ -71,7 +69,7 @@ def process_excel_file(uploaded_file):
             col_b_str = str(col_b_raw).strip()
             col_c = safe_get(row, 2, None)
             
-            # 1. CLIENTE
+            # 1. CLIENTE (Utilidad en Col B)
             if "Utilidad" in col_b_str: 
                 current_client = clean_client_name(col_a)
                 continue 
@@ -85,7 +83,7 @@ def process_excel_file(uploaded_file):
             if col_a == "ID Parte" or col_a == "nan" or col_a == "":
                 continue
 
-            # 4. FACTURA
+            # 4. FACTURA (Número en Col B)
             if is_number(col_b_raw):
                 if is_valid_date(col_c):
                     current_fecha = col_c
@@ -97,71 +95,116 @@ def process_excel_file(uploaded_file):
             if current_client: 
                 clean_row = {
                     "CLIENTE": current_client,
-                    "PART ID": col_a,
+                    "NP": col_a,             
                     "DESCR": col_b_str,
                     "LINEA": safe_get(row, 2, ""),     
                     "FECHA": current_fecha if current_fecha else "Sin Fecha",
-                    "TIPO_FACTURA": current_tipo, 
+                    "TIPO": current_tipo,    
                     "ALMACEN": current_almacen,   
-                    "CANTIDAD": safe_get(row, 3, 0),  
-                    "COSTO DE VENTA": safe_get(row, 6, 0),
-                    "VENTA SUBTOTAL": safe_get(row, 7, 0),
-                    "IVA": safe_get(row, 8, 0),
-                    "VENTA TOTAL": safe_get(row, 9, 0),
-                    "UTILIDAD": safe_get(row, 10, 0)
+                    "CANTIDAD": safe_get(row, 3, 0),
+                    
+                    # --- CORRECCIÓN AQUÍ: Extracción directa ---
+                    "COSTO": safe_get(row, 4, 0),   # Columna E
+                    "PRECIO": safe_get(row, 5, 0),  # Columna F
+                    
+                    "COSTO DE VENTA": safe_get(row, 6, 0), # Columna G
+                    "VENTA SUBTOTAL": safe_get(row, 7, 0), # Columna H
+                    "IVA": safe_get(row, 8, 0),            # Columna I
+                    "VENTA TOTAL": safe_get(row, 9, 0),    # Columna J
+                    "UTILIDAD": safe_get(row, 10, 0)       # Columna K
                 }
                 all_clean_rows.append(clean_row)
 
     return pd.DataFrame(all_clean_rows)
 
 # --- INTERFAZ ---
+
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    anio_seleccionado = st.radio(
+        "¿Qué año quieres descargar?",
+        ["Todo (Sin filtro)", "2024", "2025"],
+        index=2
+    )
+
 col1, col2 = st.columns(2)
 with col1:
-    file_sucio = st.file_uploader("1. Sube el Reporte descargado desde BPro (.xls)", type=["xls"])
+    file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"])
 with col2:
-    # CORRECCIÓN AQUÍ: Usamos comillas simples afuera para poder usar comillas dobles adentro
-    file_actualizador = st.file_uploader('2. Sube el archivo "CATALOGO DE PARTES" (.xlsx)', type=["xlsx", "xls"])
+    file_actualizador = st.file_uploader('2. Catálogo Partes (.xlsx)', type=["xlsx", "xls"])
 
-if st.button("PROCESAR CORREGIDO"):
+if st.button("🚀 GENERAR BASE MAESTRA"):
     if file_sucio and file_actualizador:
         try:
-            with st.spinner('Procesando con memoria entre hojas...'):
+            with st.spinner('Procesando datos y extrayendo costos...'):
+                # 1. Limpieza Inicial
                 df_limpio = process_excel_file(file_sucio)
                 
                 if df_limpio.empty:
-                    st.error("No se encontraron registros.")
+                    st.error("No se encontraron registros. Revisa el archivo de entrada.")
                 else:
-                    st.success(f"¡Éxito! Registros recuperados: {len(df_limpio)}")
-                    
+                    # 2. Cruce con Catálogo
                     df_update = pd.read_excel(file_actualizador)
-                    df_limpio['PART ID'] = df_limpio['PART ID'].astype(str).str.strip()
+                    df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
                     df_update['NP'] = df_update['NP'].astype(str).str.strip()
                     
                     df_final = pd.merge(df_limpio, df_update[['NP', 'LINEA', 'CATEGORIA']], 
-                                      left_on='PART ID', right_on='NP', how='left', suffixes=('_orig', '_new'))
+                                      on='NP', how='left', suffixes=('_orig', '_new'))
                     
+                    # Actualizar Línea y llenar Categoría
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('Desconocido')
                     
-                    df_final['FECHA_ORDEN'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
-                    df_final = df_final.sort_values(by=['FECHA_ORDEN', 'CLIENTE'], ascending=[True, True])
-                    df_final['FECHA'] = df_final['FECHA_ORDEN'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
+                    # 3. Formato de Fechas y Cálculos Temporales
+                    df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
                     
-                    cols = ["CLIENTE", "PART ID", "DESCR", "LINEA", "CATEGORIA", "FECHA", 
-                            "TIPO_FACTURA", "ALMACEN", "CANTIDAD", "COSTO DE VENTA", 
-                            "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
-                    df_final = df_final[cols]
+                    # --- FILTRO DE AÑO ---
+                    if anio_seleccionado == "2024":
+                        df_final = df_final[df_final['FECHA_DT'].dt.year == 2024]
+                    elif anio_seleccionado == "2025":
+                        df_final = df_final[df_final['FECHA_DT'].dt.year == 2025]
                     
+                    # --- CÁLCULOS ADICIONALES (Para igualar al Jefe) ---
+                    # Generar columnas 'año' y 'mes'
+                    df_final['año'] = df_final['FECHA_DT'].dt.year
+                    df_final['mes'] = df_final['FECHA_DT'].dt.month
+                    
+                    # 4. Formato y Ordenamiento Final
+                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
+                    df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
+                    
+                    # LISTA DE ORO (El orden exacto que pediste)
+                    cols_finales = [
+                        "CLIENTE", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", 
+                        "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", 
+                        "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", 
+                        "IVA", "VENTA TOTAL", "UTILIDAD"
+                    ]
+                    
+                    # Verificar que existan todas
+                    for col in cols_finales:
+                        if col not in df_final.columns:
+                            df_final[col] = 0 # Relleno de seguridad
+                            
+                    df_final = df_final[cols_finales]
+                    
+                    st.success(f"¡Listo! {len(df_final)} registros procesados. Formato 100% compatible con Power BI.")
                     st.dataframe(df_final.head())
                     
+                    # Descarga
+                    nombre_archivo = f"Base_Ventas_{anio_seleccionado if anio_seleccionado != 'Todo (Sin filtro)' else 'Completa'}.xlsx"
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        df_final.to_excel(writer, index=False, sheet_name='Base Completa')
+                        df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    st.download_button("📥 Descargar Base Completa", data=buffer.getvalue(), 
-                                     file_name="Reporte_Final_Continuo.xlsx", 
-                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button(
+                        f"📥 Descargar {nombre_archivo}", 
+                        data=buffer.getvalue(), 
+                        file_name=nombre_archivo, 
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error Técnico: {e}")
     else:
-        st.warning("Sube ambos archivos.")
+        st.warning("⚠️ Por favor sube ambos archivos para continuar.")
