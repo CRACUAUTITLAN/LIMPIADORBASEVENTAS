@@ -13,7 +13,7 @@ st.markdown("""
 Este programa transforma el reporte de BPro en el formato **EXACTO** que requiere el Dashboard de Ventas.
 1. Sube el reporte sucio (.xls).
 2. Sube el catálogo de partes (.xlsx).
-3. Selecciona el año y descarga.
+3. Escribe el año que quieres procesar en el menú de la izquierda.
 """)
 
 # --- FUNCIONES DE LIMPIEZA ---
@@ -103,15 +103,15 @@ def process_excel_file(uploaded_file):
                     "ALMACEN": current_almacen,   
                     "CANTIDAD": safe_get(row, 3, 0),
                     
-                    # --- CORRECCIÓN AQUÍ: Extracción directa ---
-                    "COSTO": safe_get(row, 4, 0),   # Columna E
-                    "PRECIO": safe_get(row, 5, 0),  # Columna F
+                    # Extracción directa de Costo y Precio (Cols E y F)
+                    "COSTO": safe_get(row, 4, 0),
+                    "PRECIO": safe_get(row, 5, 0),
                     
-                    "COSTO DE VENTA": safe_get(row, 6, 0), # Columna G
-                    "VENTA SUBTOTAL": safe_get(row, 7, 0), # Columna H
-                    "IVA": safe_get(row, 8, 0),            # Columna I
-                    "VENTA TOTAL": safe_get(row, 9, 0),    # Columna J
-                    "UTILIDAD": safe_get(row, 10, 0)       # Columna K
+                    "COSTO DE VENTA": safe_get(row, 6, 0),
+                    "VENTA SUBTOTAL": safe_get(row, 7, 0),
+                    "IVA": safe_get(row, 8, 0),
+                    "VENTA TOTAL": safe_get(row, 9, 0),
+                    "UTILIDAD": safe_get(row, 10, 0)
                 }
                 all_clean_rows.append(clean_row)
 
@@ -121,11 +121,8 @@ def process_excel_file(uploaded_file):
 
 with st.sidebar:
     st.header("⚙️ Configuración")
-    anio_seleccionado = st.radio(
-        "¿Qué año quieres descargar?",
-        ["Todo (Sin filtro)", "2024", "2025"],
-        index=2
-    )
+    # CAMBIO AQUÍ: Caja de texto libre
+    anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -136,7 +133,7 @@ with col2:
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if file_sucio and file_actualizador:
         try:
-            with st.spinner('Procesando datos y extrayendo costos...'):
+            with st.spinner(f'Procesando datos para el año {anio_texto}...'):
                 # 1. Limpieza Inicial
                 df_limpio = process_excel_file(file_sucio)
                 
@@ -158,14 +155,15 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     # 3. Formato de Fechas y Cálculos Temporales
                     df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
                     
-                    # --- FILTRO DE AÑO ---
-                    if anio_seleccionado == "2024":
-                        df_final = df_final[df_final['FECHA_DT'].dt.year == 2024]
-                    elif anio_seleccionado == "2025":
-                        df_final = df_final[df_final['FECHA_DT'].dt.year == 2025]
+                    # --- FILTRO DE AÑO DINÁMICO ---
+                    if anio_texto.isdigit():
+                        anio_num = int(anio_texto)
+                        df_final = df_final[df_final['FECHA_DT'].dt.year == anio_num]
+                        st.info(f"Filtrando registros del año: {anio_num}")
+                    else:
+                        st.warning("⚠️ No escribiste un año válido. Se descargarán TODOS los registros.")
                     
-                    # --- CÁLCULOS ADICIONALES (Para igualar al Jefe) ---
-                    # Generar columnas 'año' y 'mes'
+                    # --- CÁLCULOS ADICIONALES ---
                     df_final['año'] = df_final['FECHA_DT'].dt.year
                     df_final['mes'] = df_final['FECHA_DT'].dt.month
                     
@@ -173,7 +171,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
                     df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
-                    # LISTA DE ORO (El orden exacto que pediste)
+                    # LISTA DE ORO
                     cols_finales = [
                         "CLIENTE", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", 
                         "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", 
@@ -181,18 +179,18 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         "IVA", "VENTA TOTAL", "UTILIDAD"
                     ]
                     
-                    # Verificar que existan todas
+                    # Verificar columnas
                     for col in cols_finales:
                         if col not in df_final.columns:
-                            df_final[col] = 0 # Relleno de seguridad
+                            df_final[col] = 0 
                             
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Listo! {len(df_final)} registros procesados. Formato 100% compatible con Power BI.")
+                    st.success(f"¡Listo! {len(df_final)} registros generados.")
                     st.dataframe(df_final.head())
                     
                     # Descarga
-                    nombre_archivo = f"Base_Ventas_{anio_seleccionado if anio_seleccionado != 'Todo (Sin filtro)' else 'Completa'}.xlsx"
+                    nombre_archivo = f"Base_Ventas_{anio_texto}.xlsx"
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
