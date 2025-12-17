@@ -7,17 +7,15 @@ from datetime import datetime
 
 st.set_page_config(page_title="Generador Base Power BI", layout="wide")
 
-st.title("🏭 Generador de Base Maestra (Formato Power BI)")
+st.title("🏭 Generador de Base Maestra (Multi-Sucursal)")
 st.markdown("""
 **Instrucciones:**
-Este programa transforma el reporte de BPro en el formato **EXACTO** que requiere el Dashboard de Ventas.
-1. Sube el reporte sucio (.xls).
+1. Sube el reporte sucio de BPro (.xls).
 2. Sube el catálogo de partes (.xlsx).
-3. Escribe el año que quieres procesar en el menú de la izquierda.
+3. **Selecciona la SUCURSAL** y escribe el AÑO.
 """)
 
 # --- FUNCIONES DE LIMPIEZA ---
-
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
     text = text.replace("- -", "").replace("--", "")
@@ -50,11 +48,9 @@ def safe_get(row, index, default=0):
     except IndexError: return default
 
 def process_excel_file(uploaded_file):
-    # Leer todas las hojas
     xls = pd.read_excel(uploaded_file, sheet_name=None, header=None, engine='xlrd')
     all_clean_rows = []
 
-    # Memoria Global (Entre hojas)
     current_client = None
     current_fecha = None
     current_tipo = None
@@ -62,28 +58,20 @@ def process_excel_file(uploaded_file):
 
     for sheet_name, df in xls.items():
         data = df.values.tolist()
-        
         for i, row in enumerate(data):
             col_a = str(safe_get(row, 0, "")).strip()
             col_b_raw = safe_get(row, 1, "")
             col_b_str = str(col_b_raw).strip()
             col_c = safe_get(row, 2, None)
             
-            # 1. CLIENTE (Utilidad en Col B)
             if "Utilidad" in col_b_str: 
                 current_client = clean_client_name(col_a)
                 continue 
-            
-            # 2. FIN DE BLOQUE
             if col_a.startswith("Totales de:"):
                 current_client = None
                 continue
-            
-            # 3. BASURA
             if col_a == "ID Parte" or col_a == "nan" or col_a == "":
                 continue
-
-            # 4. FACTURA (Número en Col B)
             if is_number(col_b_raw):
                 if is_valid_date(col_c):
                     current_fecha = col_c
@@ -91,7 +79,6 @@ def process_excel_file(uploaded_file):
                 current_almacen = safe_get(row, 4, "")
                 continue 
 
-            # 5. PRODUCTO
             if current_client: 
                 clean_row = {
                     "CLIENTE": current_client,
@@ -102,11 +89,8 @@ def process_excel_file(uploaded_file):
                     "TIPO": current_tipo,    
                     "ALMACEN": current_almacen,   
                     "CANTIDAD": safe_get(row, 3, 0),
-                    
-                    # Extracción directa de Costo y Precio (Cols E y F)
                     "COSTO": safe_get(row, 4, 0),
                     "PRECIO": safe_get(row, 5, 0),
-                    
                     "COSTO DE VENTA": safe_get(row, 6, 0),
                     "VENTA SUBTOTAL": safe_get(row, 7, 0),
                     "IVA": safe_get(row, 8, 0),
@@ -121,7 +105,9 @@ def process_excel_file(uploaded_file):
 
 with st.sidebar:
     st.header("⚙️ Configuración")
-    # CAMBIO AQUÍ: Caja de texto libre
+    # 1. Selector de Sucursal
+    sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
+    # 2. Selector de Año
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 col1, col2 = st.columns(2)
@@ -133,14 +119,14 @@ with col2:
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if file_sucio and file_actualizador:
         try:
-            with st.spinner(f'Procesando datos para el año {anio_texto}...'):
-                # 1. Limpieza Inicial
+            with st.spinner(f'Procesando {sucursal} para el año {anio_texto}...'):
+                # 1. Limpieza
                 df_limpio = process_excel_file(file_sucio)
                 
                 if df_limpio.empty:
-                    st.error("No se encontraron registros. Revisa el archivo de entrada.")
+                    st.error("No se encontraron registros.")
                 else:
-                    # 2. Cruce con Catálogo
+                    # 2. Cruce Catálogo
                     df_update = pd.read_excel(file_actualizador)
                     df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
                     df_update['NP'] = df_update['NP'].astype(str).str.strip()
@@ -148,49 +134,46 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final = pd.merge(df_limpio, df_update[['NP', 'LINEA', 'CATEGORIA']], 
                                       on='NP', how='left', suffixes=('_orig', '_new'))
                     
-                    # Actualizar Línea y llenar Categoría
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('Desconocido')
                     
-                    # 3. Formato de Fechas y Cálculos Temporales
+                    # 3. Fechas y Filtros
                     df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
                     
-                    # --- FILTRO DE AÑO DINÁMICO ---
                     if anio_texto.isdigit():
                         anio_num = int(anio_texto)
                         df_final = df_final[df_final['FECHA_DT'].dt.year == anio_num]
-                        st.info(f"Filtrando registros del año: {anio_num}")
-                    else:
-                        st.warning("⚠️ No escribiste un año válido. Se descargarán TODOS los registros.")
                     
-                    # --- CÁLCULOS ADICIONALES ---
+                    # 4. Enriquecimiento de Datos
                     df_final['año'] = df_final['FECHA_DT'].dt.year
                     df_final['mes'] = df_final['FECHA_DT'].dt.month
                     
-                    # 4. Formato y Ordenamiento Final
+                    # --- NUEVO: Agregar Columna SUCURSAL ---
+                    df_final['SUCURSAL'] = sucursal  # <--- MAGIA AQUÍ
+                    
+                    # 5. Formato Final
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
                     df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
-                    # LISTA DE ORO
+                    # LISTA DE ORO (+ SUCURSAL al inicio)
                     cols_finales = [
-                        "CLIENTE", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", 
+                        "SUCURSAL", "CLIENTE", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", 
                         "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", 
                         "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", 
                         "IVA", "VENTA TOTAL", "UTILIDAD"
                     ]
                     
-                    # Verificar columnas
                     for col in cols_finales:
                         if col not in df_final.columns:
                             df_final[col] = 0 
                             
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Listo! {len(df_final)} registros generados.")
+                    st.success(f"¡Listo! Base de {sucursal} generada con {len(df_final)} registros.")
                     st.dataframe(df_final.head())
                     
-                    # Descarga
-                    nombre_archivo = f"Base_Ventas_{anio_texto}.xlsx"
+                    # Nombre dinámico: Ej. TULTITLAN_Ventas_2025.xlsx
+                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}.xlsx"
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
@@ -205,4 +188,4 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
         except Exception as e:
             st.error(f"Error Técnico: {e}")
     else:
-        st.warning("⚠️ Por favor sube ambos archivos para continuar.")
+        st.warning("⚠️ Sube ambos archivos.")
