@@ -219,8 +219,11 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     
                     # 6. Orden Final y Limpieza de Columnas
                     
-                    # PASO CRÍTICO: Ordenar usando FECHA_DT *ANTES* de borrar la columna
+                    # PASO CRÍTICO 1: Ordenar usando FECHA_DT 
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
+
+                    # PASO CRÍTICO 2: Formato fecha string para excel (ANTES DE BORRAR FECHA_DT)
+                    df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
                     cols_finales = [
                         "SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", 
@@ -234,11 +237,8 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         if col not in df_final.columns:
                             df_final[col] = 0 
                     
-                    # Selección Final de Columnas (Aquí se borra FECHA_DT, por eso ordenamos antes)
+                    # PASO CRÍTICO 3: Ahora sí filtramos y borramos lo que sobra
                     df_final = df_final[cols_finales]
-                    
-                    # Formato fecha string para excel
-                    df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
                     st.success(f"¡Éxito! Base generada con {len(df_final)} registros.")
                     st.dataframe(df_final.head())
