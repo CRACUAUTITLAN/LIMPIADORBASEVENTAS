@@ -218,6 +218,10 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final['SUCURSAL'] = sucursal
                     
                     # 6. Orden Final de Columnas
+                    
+                    # --- CORRECCIÓN: ORDENAR ANTES DE FILTRAR COLUMNAS ---
+                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
+                    
                     cols_finales = [
                         "SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", 
                         "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", 
@@ -225,30 +229,16 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         "IVA", "VENTA TOTAL", "UTILIDAD"
                     ]
                     
-                    # Rellenar columnas faltantes
+                    # Rellenar columnas faltantes si alguna no existe
                     for col in cols_finales:
                         if col not in df_final.columns:
                             df_final[col] = 0 
-                            
+                    
+                    # Ahora sí, nos quedamos solo con las columnas finales para el Excel
                     df_final = df_final[cols_finales]
-                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
                     
-                    # Formato fecha string para excel
-                    df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
-                    
-                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros.")
-                    st.dataframe(df_final.head())
-                    
-                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        df_final.to_excel(writer, index=False, sheet_name='Datos')
-                    
-                    st.download_button(
-                        f"📥 Descargar {nombre_archivo}", 
-                        data=buffer.getvalue(), 
-                        file_name=nombre_archivo, 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    # Formato fecha string para excel (asegurar formato dd/mm/yyyy)
+                    # Nota: Ya ordenamos, así que no necesitamos FECHA_DT después de esto
                     )
 
         except Exception as e:
