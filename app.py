@@ -106,14 +106,13 @@ def process_main_bpro(uploaded_file):
             # 1. Detectar Cliente
             if "Utilidad" in col_b_str: 
                 current_client = clean_text(col_a)
-                # Según lógica: Debajo del cliente viene la factura
                 next_is_factura = True 
                 continue 
             
-            # 2. Detectar Factura (La fila justo después del cliente)
+            # 2. Detectar Factura
             if next_is_factura:
                 current_factura = clean_text(col_a)
-                next_is_factura = False # Apagamos la bandera
+                next_is_factura = False 
                 continue
 
             if col_a.startswith("Totales de:"):
@@ -124,7 +123,6 @@ def process_main_bpro(uploaded_file):
             if col_a == "ID Parte" or col_a == "nan" or col_a == "":
                 continue
                 
-            # Captura de metadatos de encabezado de items (Fecha, Tipo, Almacen)
             if is_number(col_b_raw):
                 if is_valid_date(col_c):
                     current_fecha = col_c
@@ -132,11 +130,11 @@ def process_main_bpro(uploaded_file):
                 current_almacen = safe_get(row, 4, "")
                 continue 
 
-            # 3. Captura de Items (Filas de datos)
+            # 3. Captura de Items
             if current_client and current_factura: 
                 clean_row = {
                     "CLIENTE": current_client,
-                    "FACTURA": current_factura, # Nueva Columna
+                    "FACTURA": current_factura, 
                     "NP": col_a,             
                     "DESCR": col_b_str,
                     "LINEA": safe_get(row, 2, ""),     
@@ -188,8 +186,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 if df_limpio.empty:
                     st.error("No se encontraron registros en el archivo BPro.")
                 else:
-                    # 3. Cruce con Vendedores (Usando FACTURA como llave)
-                    # Aseguramos que sea string y quitamos espacios para el match
+                    # 3. Cruce con Vendedores
                     df_limpio['FACTURA'] = df_limpio['FACTURA'].astype(str).str.strip()
                     df_limpio['VENDEDOR'] = df_limpio['FACTURA'].map(mapa_vendedores).fillna("NO ASIGNADO")
 
@@ -201,8 +198,18 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final = pd.merge(df_limpio, df_update[['NP', 'LINEA', 'CATEGORIA']], 
                                       on='NP', how='left', suffixes=('_orig', '_new'))
                     
+                    # --- LÓGICA "X DEFINIR" (Nueva) ---
+                    # Identificamos filas que no cruzaron (CATEGORIA es NaN)
+                    mask_sin_catalogo = df_final['CATEGORIA'].isna()
+                    
+                    # 1. Sobreescribimos DESCR con "X DEFINIR" (Ignoramos info de BPro)
+                    df_final.loc[mask_sin_catalogo, 'DESCR'] = 'X DEFINIR'
+                    
+                    # 2. Rellenamos CATEGORIA con "X DEFINIR"
+                    df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
+                    
+                    # 3. Ajuste de LINEA (Nuevo del catálogo o mantiene original)
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
-                    df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('Desconocido')
                     
                     # 5. Fechas y Mes en Letra
                     df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
@@ -212,17 +219,14 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         df_final = df_final[df_final['FECHA_DT'].dt.year == anio_num]
                     
                     df_final['año'] = df_final['FECHA_DT'].dt.year
-                    # Convertir numero de mes a Nombre (ENERO, FEBRERO...)
                     df_final['mes'] = df_final['FECHA_DT'].apply(get_mes_espanol)
                     
                     df_final['SUCURSAL'] = sucursal
                     
-                    # 6. Orden Final y Limpieza de Columnas
-                    
-                    # PASO CRÍTICO 1: Ordenar usando FECHA_DT 
+                    # 6. Orden Final (Ordenar ANTES de filtrar columnas)
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
-
-                    # PASO CRÍTICO 2: Formato fecha string para excel (ANTES DE BORRAR FECHA_DT)
+                    
+                    # Formato fecha string para excel
                     df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
                     cols_finales = [
@@ -232,15 +236,13 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         "IVA", "VENTA TOTAL", "UTILIDAD"
                     ]
                     
-                    # Rellenar columnas faltantes
                     for col in cols_finales:
                         if col not in df_final.columns:
                             df_final[col] = 0 
-                    
-                    # PASO CRÍTICO 3: Ahora sí filtramos y borramos lo que sobra
+                            
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros.")
+                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros. (Items no encontrados marcados como 'X DEFINIR')")
                     st.dataframe(df_final.head())
                     
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
