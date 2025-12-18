@@ -82,7 +82,7 @@ def process_vendedores_file(uploaded_file):
             
     return mapa_factura_vendedor
 
-# --- PROCESAMIENTO PRINCIPAL ---
+# --- PROCESAMIENTO PRINCIPAL BPRO ---
 def process_main_bpro(uploaded_file):
     xls = pd.read_excel(uploaded_file, sheet_name=None, header=None, engine='xlrd')
     all_clean_rows = []
@@ -106,7 +106,7 @@ def process_main_bpro(uploaded_file):
             # 1. Detectar Cliente
             if "Utilidad" in col_b_str: 
                 current_client = clean_text(col_a)
-                # Según tu lógica: Debajo del cliente viene la factura
+                # Según lógica: Debajo del cliente viene la factura
                 next_is_factura = True 
                 continue 
             
@@ -212,14 +212,14 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         df_final = df_final[df_final['FECHA_DT'].dt.year == anio_num]
                     
                     df_final['año'] = df_final['FECHA_DT'].dt.year
-                    # AQUI ESTA EL CAMBIO A NOMBRE DE MES
+                    # Convertir numero de mes a Nombre (ENERO, FEBRERO...)
                     df_final['mes'] = df_final['FECHA_DT'].apply(get_mes_espanol)
                     
                     df_final['SUCURSAL'] = sucursal
                     
-                    # 6. Orden Final de Columnas
+                    # 6. Orden Final y Limpieza de Columnas
                     
-                    # --- CORRECCIÓN: ORDENAR ANTES DE FILTRAR COLUMNAS ---
+                    # PASO CRÍTICO: Ordenar usando FECHA_DT *ANTES* de borrar la columna
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
                     
                     cols_finales = [
@@ -229,16 +229,30 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         "IVA", "VENTA TOTAL", "UTILIDAD"
                     ]
                     
-                    # Rellenar columnas faltantes si alguna no existe
+                    # Rellenar columnas faltantes
                     for col in cols_finales:
                         if col not in df_final.columns:
                             df_final[col] = 0 
                     
-                    # Ahora sí, nos quedamos solo con las columnas finales para el Excel
+                    # Selección Final de Columnas (Aquí se borra FECHA_DT, por eso ordenamos antes)
                     df_final = df_final[cols_finales]
                     
-                    # Formato fecha string para excel (asegurar formato dd/mm/yyyy)
-                    # Nota: Ya ordenamos, así que no necesitamos FECHA_DT después de esto
+                    # Formato fecha string para excel
+                    df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
+                    
+                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros.")
+                    st.dataframe(df_final.head())
+                    
+                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                        df_final.to_excel(writer, index=False, sheet_name='Datos')
+                    
+                    st.download_button(
+                        f"📥 Descargar {nombre_archivo}", 
+                        data=buffer.getvalue(), 
+                        file_name=nombre_archivo, 
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
         except Exception as e:
