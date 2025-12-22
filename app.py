@@ -7,26 +7,27 @@ from datetime import datetime
 
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
-# --- FUNCIÓN PARA REINICIAR LA APP ---
+# --- 1. INICIALIZAR EL CONTADOR DE LIMPIEZA ---
+# Esto crea un número único que cambiará cada vez que limpiemos
+if 'id_limpieza' not in st.session_state:
+    st.session_state['id_limpieza'] = 0
+
+# --- FUNCIÓN PARA REINICIAR ---
 def reset_all():
-    # Esto borra los archivos cargados de la memoria
-    st.session_state['key_sucio'] = None
-    st.session_state['key_vendedores'] = None
-    st.session_state['key_catalogo'] = None
-    # Opcional: Si quieres reiniciar también el texto del año, descomenta la siguiente línea:
-    # st.session_state['key_anio'] = "2025"
+    # En lugar de borrar variables, simplemente aumentamos el contador.
+    # Esto hará que los keys de los uploaders cambien y se reinicien solos.
+    st.session_state['id_limpieza'] += 1
 
 # --- SIDEBAR Y CONFIGURACIÓN ---
 with st.sidebar:
     st.header("⚙️ Configuración")
     
-    # Botón para limpiar todo
+    # El botón ahora llama a la función que aumenta el contador
     st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", help="Borra los archivos y reinicia la memoria")
     
     st.markdown("---")
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
-    # Agregamos key para poder controlarlo si quisieras, aunque el texto se sobrescribe fácil
-    anio_texto = st.text_input("Escribe el año a trabajar:", value="2025", key="key_anio")
+    anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 st.title("🏭 Generador de Base Maestra")
 st.markdown("""
@@ -37,7 +38,7 @@ st.markdown("""
 4. **Presiona "LIMPIAR" en la barra lateral antes de hacer otra.**
 """)
 
-# --- FUNCIONES AUXILIARES ---
+# --- FUNCIONES AUXILIARES (Igual que antes) ---
 
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
@@ -171,17 +172,20 @@ def process_main_bpro(uploaded_file):
 
     return pd.DataFrame(all_clean_rows)
 
-# --- ZONA DE CARGA (Con Keys para Reinicio) ---
+# --- ZONA DE CARGA (AQUÍ ESTÁ LA MAGIA) ---
 st.subheader("1. Carga de Archivos")
 col1, col2, col3 = st.columns(3)
 
-# AQUI ESTA EL CAMBIO IMPORTANTE: key=...
+# Obtenemos el ID actual del contador
+uid = st.session_state['id_limpieza']
+
+# Usamos f-strings para que el KEY cambie cada vez que pulsamos el botón
 with col1:
-    file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key="key_sucio")
+    file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"sucio_{uid}")
 with col2:
-    file_vendedores = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key="key_vendedores")
+    file_vendedores = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"vend_{uid}")
 with col3:
-    file_catalogo = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key="key_catalogo")
+    file_catalogo = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key=f"cat_{uid}")
 
 # --- BOTÓN DE EJECUCIÓN ---
 if st.button("🚀 GENERAR BASE MAESTRA"):
@@ -241,7 +245,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     
                     st.success(f"¡Éxito! Base generada con {len(df_final)} registros.")
                     
-                    # PREVIEW LIMITADO
                     st.dataframe(df_final.head(10))
                     
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
