@@ -31,7 +31,7 @@ st.markdown("""
 1. Sube los archivos.
 2. Genera la base.
 3. Descarga.
-4. **Presiona "LIMPIAR" en la barra lateral antes de hacer otra.**
+4. **Presiona "LIMPIAR" en la barra lateral antes de cargar nuevos archivos.**
 """)
 
 # --- FUNCIONES AUXILIARES ---
@@ -198,7 +198,9 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 else:
                     df_limpio['SUCURSAL'] = sucursal
                     df_limpio['FACTURA'] = df_limpio['FACTURA'].astype(str).str.strip()
-                    df_limpio['VENDEDOR'] = df_limpio['FACTURA'].map(mapa_vendedores).fillna("NO ASIGNADO")
+                    
+                    # === ACTUALIZACIÓN: SI NO ENCUENTRA VENDEDOR, PONE "Sin Vendedor" ===
+                    df_limpio['VENDEDOR'] = df_limpio['FACTURA'].map(mapa_vendedores).fillna("Sin Vendedor")
 
                     df_update = pd.read_excel(file_catalogo)
                     df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
@@ -214,24 +216,20 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     
                     # ==============================================================================
-                    # NUEVA CORRECCIÓN DE DEVOLUCIONES (ERROR BPRO)
+                    # CORRECCIÓN DE DEVOLUCIONES (ERROR BPRO: CANTIDAD NEGATIVA, COSTO POSITIVO)
                     # ==============================================================================
                     
-                    # Aseguramos que las columnas sean numéricas para evitar errores de cálculo
                     cols_numericas = ['CANTIDAD', 'COSTO DE VENTA', 'VENTA SUBTOTAL', 'UTILIDAD']
                     for col in cols_numericas:
                         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
 
-                    # IDENTIFICAR EL ERROR: Cantidad Negativa (Devolución) Y Costo de Venta Positivo
-                    # Si Costo de Venta ya es negativo, no lo tocamos.
+                    # 1. Detectar filas erróneas
                     mask_error_bpro = (df_final['CANTIDAD'] < 0) & (df_final['COSTO DE VENTA'] > 0)
                     
-                    # 1. CORREGIR EL SIGNO DEL COSTO DE VENTA (Solo en las filas detectadas)
+                    # 2. Corregir Costo (Invertir signo)
                     df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] = df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] * -1
                     
-                    # 2. RECALCULAR LA UTILIDAD (Solo en las filas corregidas para asegurar precisión)
-                    # Fórmula: Utilidad = Venta Subtotal - Costo de Venta
-                    # (Como ambos son negativos en una devolución, la resta algebraica es correcta: -100 - (-80) = -20)
+                    # 3. Recalcular Utilidad
                     df_final.loc[mask_error_bpro, 'UTILIDAD'] = df_final.loc[mask_error_bpro, 'VENTA SUBTOTAL'] - df_final.loc[mask_error_bpro, 'COSTO DE VENTA']
                     
                     # ==============================================================================
@@ -260,7 +258,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                             df_final[col] = 0 
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros. (Corrección de costos en devoluciones aplicada)")
+                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros. (Ventas sin asignación marcadas como 'Sin Vendedor')")
                     
                     st.dataframe(df_final.head(10))
                     
