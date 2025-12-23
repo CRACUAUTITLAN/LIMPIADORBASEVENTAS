@@ -8,21 +8,17 @@ from datetime import datetime
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
 # --- 1. INICIALIZAR EL CONTADOR DE LIMPIEZA ---
-# Esto crea un número único que cambiará cada vez que limpiemos
 if 'id_limpieza' not in st.session_state:
     st.session_state['id_limpieza'] = 0
 
 # --- FUNCIÓN PARA REINICIAR ---
 def reset_all():
-    # En lugar de borrar variables, simplemente aumentamos el contador.
-    # Esto hará que los keys de los uploaders cambien y se reinicien solos.
     st.session_state['id_limpieza'] += 1
 
 # --- SIDEBAR Y CONFIGURACIÓN ---
 with st.sidebar:
     st.header("⚙️ Configuración")
     
-    # El botón ahora llama a la función que aumenta el contador
     st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", help="Borra los archivos y reinicia la memoria")
     
     st.markdown("---")
@@ -38,7 +34,7 @@ st.markdown("""
 4. **Presiona "LIMPIAR" en la barra lateral antes de hacer otra.**
 """)
 
-# --- FUNCIONES AUXILIARES (Igual que antes) ---
+# --- FUNCIONES AUXILIARES ---
 
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
@@ -155,9 +151,9 @@ def process_main_bpro(uploaded_file):
                     "FACTURA": current_factura,
                     "NP": col_a_str,              
                     "DESCR": col_b_str,
-                    "LINEA": str(safe_get(row, 2, "")),      
+                    "LINEA": str(safe_get(row, 2, "")),       
                     "FECHA": current_fecha if current_fecha else "Sin Fecha",
-                    "TIPO": current_tipo,    
+                    "TIPO": current_tipo,     
                     "ALMACEN": current_almacen,   
                     "CANTIDAD": safe_get(row, 3, 0),
                     "COSTO": safe_get(row, 4, 0),
@@ -172,14 +168,12 @@ def process_main_bpro(uploaded_file):
 
     return pd.DataFrame(all_clean_rows)
 
-# --- ZONA DE CARGA (AQUÍ ESTÁ LA MAGIA) ---
+# --- ZONA DE CARGA ---
 st.subheader("1. Carga de Archivos")
 col1, col2, col3 = st.columns(3)
 
-# Obtenemos el ID actual del contador
 uid = st.session_state['id_limpieza']
 
-# Usamos f-strings para que el KEY cambie cada vez que pulsamos el botón
 with col1:
     file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"sucio_{uid}")
 with col2:
@@ -219,6 +213,29 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     
+                    # ==============================================================================
+                    # NUEVA CORRECCIÓN DE DEVOLUCIONES (ERROR BPRO)
+                    # ==============================================================================
+                    
+                    # Aseguramos que las columnas sean numéricas para evitar errores de cálculo
+                    cols_numericas = ['CANTIDAD', 'COSTO DE VENTA', 'VENTA SUBTOTAL', 'UTILIDAD']
+                    for col in cols_numericas:
+                        df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
+
+                    # IDENTIFICAR EL ERROR: Cantidad Negativa (Devolución) Y Costo de Venta Positivo
+                    # Si Costo de Venta ya es negativo, no lo tocamos.
+                    mask_error_bpro = (df_final['CANTIDAD'] < 0) & (df_final['COSTO DE VENTA'] > 0)
+                    
+                    # 1. CORREGIR EL SIGNO DEL COSTO DE VENTA (Solo en las filas detectadas)
+                    df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] = df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] * -1
+                    
+                    # 2. RECALCULAR LA UTILIDAD (Solo en las filas corregidas para asegurar precisión)
+                    # Fórmula: Utilidad = Venta Subtotal - Costo de Venta
+                    # (Como ambos son negativos en una devolución, la resta algebraica es correcta: -100 - (-80) = -20)
+                    df_final.loc[mask_error_bpro, 'UTILIDAD'] = df_final.loc[mask_error_bpro, 'VENTA SUBTOTAL'] - df_final.loc[mask_error_bpro, 'COSTO DE VENTA']
+                    
+                    # ==============================================================================
+                    
                     # Fechas
                     df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
                     if anio_texto.isdigit():
@@ -243,7 +260,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                             df_final[col] = 0 
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros.")
+                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros. (Corrección de costos en devoluciones aplicada)")
                     
                     st.dataframe(df_final.head(10))
                     
