@@ -5,30 +5,37 @@ import io
 import re
 from datetime import datetime
 
+# --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
+# --- ESTADO DE LA SESIÓN ---
 if 'id_limpieza' not in st.session_state:
     st.session_state['id_limpieza'] = 0
 
 def reset_all():
     st.session_state['id_limpieza'] += 1
 
+# --- BARRA LATERAL ---
 with st.sidebar:
     st.header("⚙️ Configuración")
-    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary")
+    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", help="Borra los archivos y reinicia la memoria")
     st.markdown("---")
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
+# --- TÍTULO ---
 st.title("🏭 Generador de Base Maestra")
 st.markdown("""
 **Instrucciones:**
-1. Sube los archivos.
-2. Genera la base.
-3. Descarga.
+1. Sube los archivos (BPro, Vendedores, Catálogo).
+2. Presiona "Generar Base Maestra".
+3. Descarga tu archivo limpio y cruzado.
 """)
 
-# --- FUNCIONES AUXILIARES ---
+# ==========================================
+#           FUNCIONES AUXILIARES
+# ==========================================
+
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
     cleaned = re.sub(r'[^\w\s]', '', text) 
@@ -76,8 +83,14 @@ def safe_get(row, index, default=None):
         return val
     except IndexError: return default
 
-# --- PROCESAMIENTO DE VENDEDORES (MODO HÍBRIDO) ---
+# ==========================================
+#      PROCESAMIENTO DE VENDEDORES
+# ==========================================
 def process_vendedores_file(uploaded_file):
+    """
+    Escanea el archivo de vendedores buscando montos en Columna B (Positivos) 
+    y Columna F (Negativos) para crear una lista maestra de referencias.
+    """
     df = pd.read_excel(uploaded_file, header=None)
     
     mapping_data = [] 
@@ -87,11 +100,14 @@ def process_vendedores_file(uploaded_file):
         item_a = row[0]
         text_a = str(item_a).strip()
         
+        # Saltar filas vacías o encabezados inútiles
         if text_a.lower() in ["venta", "nan", ""] or pd.isna(item_a):
             continue
             
+        # Si tiene dígitos, asumimos que es una FACTURA
         if any(char.isdigit() for char in text_a):
-            # Escanear montos (Col B y Col F) para casos complejos
+            
+            # --- ESCÁNER 1: POSITIVOS (COLUMNA B - Índice 1) ---
             val_b_clean = 0.0
             try:
                 val_b = row[1] if len(row) > 1 else 0
@@ -99,6 +115,7 @@ def process_vendedores_file(uploaded_file):
             except:
                 val_b_clean = 0.0
 
+            # --- ESCÁNER 2: NEGATIVOS (COLUMNA F - Índice 5) ---
             val_f_clean = 0.0
             try:
                 val_f = row[5] if len(row) > 5 else 0
@@ -106,32 +123,41 @@ def process_vendedores_file(uploaded_file):
             except:
                 val_f_clean = 0.0
             
-            # Guardamos todo. Si es 0, igual nos sirve saber que la factura existe para ese vendedor.
-            # Prioridad al monto mayor absoluto para guardar referencia
-            monto_ref = val_b_clean if abs(val_b_clean) > abs(val_f_clean) else val_f_clean
+            # LÓGICA DE GUARDADO:
+            # Guardamos el monto que sea distinto de cero.
+            # Si ambos tienen datos (raro), guardamos el mayor absoluto como referencia principal,
+            # pero el código abajo maneja guardado doble si es necesario.
             
-            mapping_data.append({
-                "FACTURA_MATCH": text_a,
-                "MONTO_MATCH": round(monto_ref, 2), # Guardamos el monto principal detectado
-                "VENDEDOR": current_vendedor
-            })
+            # Caso 1: Hay dato en B
+            if abs(val_b_clean) > 0.01:
+                mapping_data.append({
+                    "FACTURA_MATCH": text_a,
+                    "MONTO_MATCH": round(val_b_clean, 2),
+                    "VENDEDOR": current_vendedor
+                })
             
-            # Si detectamos que había dinero en AMBAS columnas (raro, pero posible), 
-            # agregamos una segunda entrada para asegurar match
-            if abs(val_b_clean) > 0.01 and abs(val_f_clean) > 0.01:
+            # Caso 2: Hay dato en F (y es diferente al de B, para no duplicar si fuera el mismo)
+            if abs(val_f_clean) > 0.01 and abs(val_f_clean - val_b_clean) > 0.01:
                  mapping_data.append({
                     "FACTURA_MATCH": text_a,
-                    "MONTO_MATCH": round(val_f_clean, 2), 
+                    "MONTO_MATCH": round(val_f_clean, 2),
                     "VENDEDOR": current_vendedor
                 })
 
         else:
+            # Si no es factura, es el NOMBRE DEL VENDEDOR (Encabezado del bloque)
             current_vendedor = text_a
             
     return pd.DataFrame(mapping_data)
 
-# --- PROCESAMIENTO PRINCIPAL BPRO ---
+# ==========================================
+#         PROCESAMIENTO BPRO (SUCIO)
+# ==========================================
 def process_main_bpro(uploaded_file):
+    """
+    Limpia el archivo sucio de BPro y extrae la VENTA SUBTOTAL (Col H)
+    que servirá como llave de cruce.
+    """
     xls = pd.read_excel(uploaded_file, sheet_name=None, header=None, engine='xlrd')
     all_clean_rows = []
 
@@ -150,17 +176,20 @@ def process_main_bpro(uploaded_file):
             col_b_str = str(col_b_raw).strip()
             col_c_raw = safe_get(row, 2, None)
 
+            # Detectar Cliente
             if "Utilidad" in col_b_str:
                 current_client = clean_client_name(col_a_str)
                 current_factura = None 
                 current_fecha = None
                 continue
 
+            # Detectar fin de bloque
             if col_a_str.startswith("Totales de:"):
                 current_client = None
                 current_factura = None
                 continue
 
+            # Detectar Encabezado de Factura (Tiene numero en Col B y Fecha en Col C)
             if is_number(col_b_raw) and is_valid_date(col_c_raw):
                 current_factura = col_a_str
                 current_fecha = col_c_raw
@@ -168,13 +197,16 @@ def process_main_bpro(uploaded_file):
                 current_almacen = safe_get(row, 4, "")
                 continue
 
+            # Ignorar basura
             if col_a_str in ["ID Parte", "nan", "", "Diario de Ventas", "Página"]:
                 continue
             if "Diario de Ventas" in col_a_str or "Página" in col_a_str:
                 continue
 
+            # Extraer filas de productos
             if current_client and current_factura:
                 try:
+                    # BPRO Columna H (Index 7) es VENTA SUBTOTAL
                     subtotal_val = safe_get(row, 7, 0)
                     subtotal_clean = float(str(subtotal_val).replace(',', ''))
                     
@@ -198,7 +230,7 @@ def process_main_bpro(uploaded_file):
                     "COSTO": safe_get(row, 4, 0),
                     "PRECIO": safe_get(row, 5, 0),
                     "COSTO DE VENTA": safe_get(row, 6, 0),
-                    "VENTA SUBTOTAL": subtotal_clean,
+                    "VENTA SUBTOTAL": subtotal_clean, # LLAVE CLAVE
                     "IVA": safe_get(row, 8, 0),
                     "VENTA TOTAL": safe_get(row, 9, 0),
                     "UTILIDAD": utilidad_clean
@@ -207,7 +239,9 @@ def process_main_bpro(uploaded_file):
 
     return pd.DataFrame(all_clean_rows)
 
-# --- ZONA DE CARGA ---
+# ==========================================
+#              INTERFAZ DE CARGA
+# ==========================================
 st.subheader("1. Carga de Archivos")
 col1, col2, col3 = st.columns(3)
 
@@ -220,73 +254,80 @@ with col2:
 with col3:
     file_catalogo = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key=f"cat_{uid}")
 
-# --- BOTÓN DE EJECUCIÓN ---
+# ==========================================
+#           LOGICA PRINCIPAL (EJECUCIÓN)
+# ==========================================
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if file_sucio and file_catalogo and file_vendedores:
         try:
             with st.spinner('Procesando datos y cruzando información...'):
                 
-                # 1. Obtener datos de vendedores
+                # --- PASO 1: PROCESAR VENDEDORES (ESCÁNER) ---
                 df_vendedores_full = process_vendedores_file(file_vendedores)
                 
-                # 2. Analizar MULTIPLICIDAD (¿Quiénes comparten factura?)
-                # Contamos cuántos vendedores ÚNICOS hay por factura
+                # --- PASO 2: ANALIZAR MULTIPLICIDAD (Simple vs Complejo) ---
+                # Contamos cuántos vendedores únicos existen para cada factura
                 conteo_vendedores = df_vendedores_full.groupby('FACTURA_MATCH')['VENDEDOR'].nunique()
                 
-                # Separamos las facturas en "Sencillas" (1 solo dueño) y "Complejas" (>1 dueño)
                 facturas_sencillas = conteo_vendedores[conteo_vendedores == 1].index.tolist()
                 facturas_complejas = conteo_vendedores[conteo_vendedores > 1].index.tolist()
                 
-                # Creamos un Diccionario Simple para las sencillas {Factura: Vendedor}
-                # Esto ignora montos, errores de redondeo, etc. Es infalible para el 95% de casos.
+                # Mapa Simple (Para facturas con 1 solo dueño)
                 df_sencillas = df_vendedores_full[df_vendedores_full['FACTURA_MATCH'].isin(facturas_sencillas)]
-                # Quitamos duplicados para tener 1 registro por factura
+                # Quitamos duplicados para tener un diccionario limpio {Factura: Vendedor}
                 df_sencillas_unique = df_sencillas.drop_duplicates(subset=['FACTURA_MATCH'])
                 mapa_sencillo = dict(zip(df_sencillas_unique['FACTURA_MATCH'], df_sencillas_unique['VENDEDOR']))
                 
-                # 3. Obtener datos BPro
+                # --- PASO 3: PROCESAR BPRO ---
                 df_limpio = process_main_bpro(file_sucio)
                 
                 if df_limpio.empty:
-                    st.error("No se encontraron registros.")
+                    st.error("No se encontraron registros en el archivo BPro.")
                 else:
                     df_limpio['SUCURSAL'] = sucursal
+                    # Preparamos llave de texto
                     df_limpio['FACTURA_MATCH'] = df_limpio['FACTURA'].astype(str).str.strip()
                     
-                    # === FASE 1: ASIGNACIÓN DIRECTA (FACTURAS SENCILLAS) ===
-                    # Si la factura está en el mapa sencillo, se asigna directo.
+                    # === FASE A: ASIGNACIÓN DIRECTA (FACTURAS SENCILLAS) ===
+                    # El 95% de los casos se resuelve aquí sin mirar montos
                     df_limpio['VENDEDOR'] = df_limpio['FACTURA_MATCH'].map(mapa_sencillo)
                     
-                    # === FASE 2: ASIGNACIÓN DETALLADA (FACTURAS COMPLEJAS) ===
-                    # Identificamos las filas que siguen vacías (son las complejas o las no encontradas)
-                    # Y que ADEMÁS sean facturas que sabemos que son complejas
+                    # === FASE B: ASIGNACIÓN DETALLADA (FACTURAS COMPLEJAS) ===
+                    # Filtramos las filas que siguen sin vendedor Y que sabemos que son complejas
                     mask_complejas = (df_limpio['VENDEDOR'].isna()) & (df_limpio['FACTURA_MATCH'].isin(facturas_complejas))
                     
                     if mask_complejas.any():
-                        # Preparamos sub-dataframe para cruce estricto
+                        # Creamos sub-dataframe para trabajar
                         df_to_fix = df_limpio.loc[mask_complejas].copy()
+                        
+                        # Preparamos llave de monto (redondeada a 2 decimales para match exacto)
                         df_to_fix['MONTO_MATCH'] = df_to_fix['VENTA SUBTOTAL'].round(2)
                         
                         df_vendedores_full['MONTO_MATCH'] = df_vendedores_full['MONTO_MATCH'].round(2)
                         df_vendedores_full['FACTURA_MATCH'] = df_vendedores_full['FACTURA_MATCH'].astype(str).str.strip()
                         
-                        # Cruce estricto: Factura + Monto
+                        # --- CORRECCIÓN CRÍTICA ANTI-DUPLICADOS ---
+                        # Eliminamos duplicados en la tabla de referencia (Vendedores) antes del cruce.
+                        # Esto asegura que para (Factura X + Monto Y) solo exista 1 registro.
+                        # Evita el error "ValueError: Must have equal len keys..."
+                        df_vendedores_unique_match = df_vendedores_full.drop_duplicates(subset=['FACTURA_MATCH', 'MONTO_MATCH'])
+                        
+                        # Hacemos el cruce estricto: Factura + Monto
                         df_fixed = pd.merge(
                             df_to_fix,
-                            df_vendedores_full[['FACTURA_MATCH', 'MONTO_MATCH', 'VENDEDOR']],
+                            df_vendedores_unique_match[['FACTURA_MATCH', 'MONTO_MATCH', 'VENDEDOR']],
                             on=['FACTURA_MATCH', 'MONTO_MATCH'],
                             how='left',
                             suffixes=('', '_new')
                         )
                         
-                        # Actualizamos el dataframe principal con lo encontrado
-                        # Usamos el índice para asegurar que caiga en el lugar correcto
+                        # Asignamos lo encontrado de vuelta al dataframe principal
                         df_limpio.loc[mask_complejas, 'VENDEDOR'] = df_fixed['VENDEDOR_new'].values
                     
-                    # Rellenar restantes con "Sin Vendedor"
+                    # Rellenar lo que de plano no se encontró
                     df_limpio['VENDEDOR'] = df_limpio['VENDEDOR'].fillna("Sin Vendedor")
 
-                    # --- CONTINUA EL PROCESO (Catálogo, Fechas, etc) ---
+                    # --- PASO 4: CRUCE CON CATÁLOGO ---
                     df_update = pd.read_excel(file_catalogo)
                     df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
                     df_update['NP'] = df_update['NP'].astype(str).str.strip()
@@ -294,19 +335,24 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final = pd.merge(df_limpio, df_update[['NP', 'LINEA', 'CATEGORIA']], 
                                       on='NP', how='left', suffixes=('_orig', '_new'))
                     
+                    # Lógica de relleno de catálogo
                     mask_sin_catalogo = df_final['CATEGORIA'].isna()
                     df_final.loc[mask_sin_catalogo, 'DESCR'] = 'X DEFINIR'
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     
+                    # --- PASO 5: CORRECCIONES FINALES DE NÚMEROS ---
                     cols_numericas = ['CANTIDAD', 'COSTO DE VENTA', 'VENTA SUBTOTAL', 'UTILIDAD']
                     for col in cols_numericas:
                         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
 
+                    # Corregir signos en devoluciones (BPro a veces pone Costo positivo en devoluciones)
                     mask_error_bpro = (df_final['CANTIDAD'] < 0) & (df_final['COSTO DE VENTA'] > 0)
                     df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] = df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] * -1
+                    # Recalcular utilidad con el costo correcto
                     df_final.loc[mask_error_bpro, 'UTILIDAD'] = df_final.loc[mask_error_bpro, 'VENTA SUBTOTAL'] - df_final.loc[mask_error_bpro, 'COSTO DE VENTA']
                     
+                    # --- PASO 6: FECHAS Y ORDEN ---
                     df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
                     if anio_texto.isdigit():
                         anio_num = int(anio_texto)
@@ -317,13 +363,16 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
                     df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
+                    # Selección de columnas finales
                     cols_finales = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
                     
+                    # Asegurar que existan todas
                     for col in cols_finales:
                         if col not in df_final.columns: df_final[col] = 0 
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Éxito! Lógica Híbrida Aplicada: Asignación Directa para facturas únicas + Escáner de Montos para facturas compartidas.")
+                    # --- FIN: MOSTRAR Y DESCARGAR ---
+                    st.success(f"¡Éxito! Base generada correctamente.")
                     st.dataframe(df_final.head(10))
                     
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
@@ -331,7 +380,12 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), file_name=nombre_archivo, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button(
+                        label=f"📥 Descargar {nombre_archivo}", 
+                        data=buffer.getvalue(), 
+                        file_name=nombre_archivo, 
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
         except Exception as e:
             st.error(f"Error Técnico: {e}")
