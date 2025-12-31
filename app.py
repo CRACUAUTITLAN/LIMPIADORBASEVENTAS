@@ -83,23 +83,40 @@ def safe_get(row, index, default=None):
         return val
     except IndexError: return default
 
-# --- PROCESAMIENTO DE VENDEDORES ---
+# --- PROCESAMIENTO DE VENDEDORES (ACTUALIZADO: COLUMNA J - VENTA SUBTOTAL) ---
 def process_vendedores_file(uploaded_file):
+    # Leemos todo el excel
     df = pd.read_excel(uploaded_file, header=None)
-    data = df.iloc[:, 0].tolist()
     
-    mapa_factura_vendedor = {}
+    mapping_data = [] # Lista para guardar: {FACTURA, SUBTOTAL, VENDEDOR}
     current_vendedor = "SIN VENDEDOR"
     
-    for item in data:
-        text = str(item).strip()
-        if text.lower() in ["venta", "nan", ""] or pd.isna(item):
+    for index, row in df.iterrows():
+        item_a = row[0]
+        text_a = str(item_a).strip()
+        
+        if text_a.lower() in ["venta", "nan", ""] or pd.isna(item_a):
             continue
-        if any(char.isdigit() for char in text):
-            mapa_factura_vendedor[text] = current_vendedor
+            
+        if any(char.isdigit() for char in text_a):
+            # === CAMBIO SOLICITADO ===
+            # Ahora leemos la Columna J (Índice 9 en Python: A=0, ... J=9)
+            try:
+                # safe_get usa tu funcion auxiliar, o acceso directo si el df tiene suficientes cols
+                val_subtotal = row[9] if len(row) > 9 else 0
+                subtotal_float = float(str(val_subtotal).replace(',', '').replace('$', ''))
+            except:
+                subtotal_float = 0.0
+            
+            mapping_data.append({
+                "FACTURA_MATCH": text_a,
+                "SUBTOTAL_MATCH": round(subtotal_float, 2), # Redondeo de seguridad
+                "VENDEDOR": current_vendedor
+            })
         else:
-            current_vendedor = text
-    return mapa_factura_vendedor
+            current_vendedor = text_a
+            
+    return pd.DataFrame(mapping_data)
 
 # --- PROCESAMIENTO PRINCIPAL BPRO ---
 def process_main_bpro(uploaded_file):
@@ -145,13 +162,21 @@ def process_main_bpro(uploaded_file):
                 continue
 
             if current_client and current_factura:
+                # Limpieza de valores numéricos clave
+                try:
+                    # Columna H es indice 7 (VENTA SUBTOTAL)
+                    subtotal_val = safe_get(row, 7, 0)
+                    subtotal_clean = float(str(subtotal_val).replace(',', ''))
+                except:
+                    subtotal_clean = 0.0
+
                 clean_row = {
                     "SUCURSAL": "PENDIENTE",
                     "CLIENTE": current_client,
                     "FACTURA": current_factura,
                     "NP": col_a_str,              
                     "DESCR": col_b_str,
-                    "LINEA": str(safe_get(row, 2, "")),       
+                    "LINEA": str(safe_get(row, 2, "")),        
                     "FECHA": current_fecha if current_fecha else "Sin Fecha",
                     "TIPO": current_tipo,     
                     "ALMACEN": current_almacen,   
@@ -159,7 +184,7 @@ def process_main_bpro(uploaded_file):
                     "COSTO": safe_get(row, 4, 0),
                     "PRECIO": safe_get(row, 5, 0),
                     "COSTO DE VENTA": safe_get(row, 6, 0),
-                    "VENTA SUBTOTAL": safe_get(row, 7, 0),
+                    "VENTA SUBTOTAL": subtotal_clean, # Guardamos limpio
                     "IVA": safe_get(row, 8, 0),
                     "VENTA TOTAL": safe_get(row, 9, 0),
                     "UTILIDAD": safe_get(row, 10, 0)
@@ -187,21 +212,39 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
         try:
             with st.spinner('Procesando datos y cruzando información...'):
                 
-                # 1. Mapas
-                mapa_vendedores = process_vendedores_file(file_vendedores)
+                # 1. Mapas (Ahora devuelve Tabla con Factura y Subtotal)
+                df_vendedores_map = process_vendedores_file(file_vendedores)
                 
                 # 2. Limpieza
                 df_limpio = process_main_bpro(file_sucio)
                 
                 if df_limpio.empty:
-                    st.error("No se encontraron registros. Revisa si el formato BPro cambió drásticamente.")
+                    st.error("No se encontraron registros.")
                 else:
                     df_limpio['SUCURSAL'] = sucursal
-                    df_limpio['FACTURA'] = df_limpio['FACTURA'].astype(str).str.strip()
                     
-                    # === ACTUALIZACIÓN: SI NO ENCUENTRA VENDEDOR, PONE "Sin Vendedor" ===
-                    df_limpio['VENDEDOR'] = df_limpio['FACTURA'].map(mapa_vendedores).fillna("Sin Vendedor")
+                    # Preparar columnas clave para el cruce (MATCH)
+                    # 1. Factura
+                    df_limpio['FACTURA_MATCH'] = df_limpio['FACTURA'].astype(str).str.strip()
+                    df_vendedores_map['FACTURA_MATCH'] = df_vendedores_map['FACTURA_MATCH'].astype(str).str.strip()
+                    
+                    # 2. SUBTOTAL (Ahora usamos VENTA SUBTOTAL en lugar de Utilidad)
+                    # df_limpio['VENTA SUBTOTAL'] ya es float desde process_main_bpro
+                    df_limpio['SUBTOTAL_MATCH'] = df_limpio['VENTA SUBTOTAL'].round(2)
+                    df_vendedores_map['SUBTOTAL_MATCH'] = df_vendedores_map['SUBTOTAL_MATCH'].round(2)
 
+                    # === CRUCE POR FACTURA Y VENTA SUBTOTAL ===
+                    df_merged = pd.merge(
+                        df_limpio, 
+                        df_vendedores_map, 
+                        on=['FACTURA_MATCH', 'SUBTOTAL_MATCH'], 
+                        how='left'
+                    )
+                    
+                    df_merged['VENDEDOR'] = df_merged['VENDEDOR'].fillna("Sin Vendedor")
+                    df_limpio = df_merged 
+
+                    # --- CONTINUA EL PROCESO DE CATALOGO Y CALCULOS ---
                     df_update = pd.read_excel(file_catalogo)
                     df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
                     df_update['NP'] = df_update['NP'].astype(str).str.strip()
@@ -209,32 +252,22 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     df_final = pd.merge(df_limpio, df_update[['NP', 'LINEA', 'CATEGORIA']], 
                                       on='NP', how='left', suffixes=('_orig', '_new'))
                     
-                    # Lógica X DEFINIR
                     mask_sin_catalogo = df_final['CATEGORIA'].isna()
                     df_final.loc[mask_sin_catalogo, 'DESCR'] = 'X DEFINIR'
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     
-                    # ==============================================================================
-                    # CORRECCIÓN DE DEVOLUCIONES (ERROR BPRO: CANTIDAD NEGATIVA, COSTO POSITIVO)
-                    # ==============================================================================
-                    
+                    # CORRECCIONES FINALES
                     cols_numericas = ['CANTIDAD', 'COSTO DE VENTA', 'VENTA SUBTOTAL', 'UTILIDAD']
                     for col in cols_numericas:
                         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
 
-                    # 1. Detectar filas erróneas
+                    # Corregir signos en devoluciones
                     mask_error_bpro = (df_final['CANTIDAD'] < 0) & (df_final['COSTO DE VENTA'] > 0)
-                    
-                    # 2. Corregir Costo (Invertir signo)
                     df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] = df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] * -1
-                    
-                    # 3. Recalcular Utilidad
                     df_final.loc[mask_error_bpro, 'UTILIDAD'] = df_final.loc[mask_error_bpro, 'VENTA SUBTOTAL'] - df_final.loc[mask_error_bpro, 'COSTO DE VENTA']
                     
-                    # ==============================================================================
-                    
-                    # Fechas
+                    # Fechas y Exportación
                     df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
                     if anio_texto.isdigit():
                         anio_num = int(anio_texto)
@@ -242,24 +275,16 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     
                     df_final['año'] = df_final['FECHA_DT'].dt.year
                     df_final['mes'] = df_final['FECHA_DT'].apply(get_mes_espanol)
-                    
-                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'], ascending=[True, True])
+                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
                     df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
-                    cols_finales = [
-                        "SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", 
-                        "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", 
-                        "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", 
-                        "IVA", "VENTA TOTAL", "UTILIDAD"
-                    ]
+                    cols_finales = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
                     
                     for col in cols_finales:
-                        if col not in df_final.columns:
-                            df_final[col] = 0 
+                        if col not in df_final.columns: df_final[col] = 0 
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Éxito! Base generada con {len(df_final)} registros. (Ventas sin asignación marcadas como 'Sin Vendedor')")
-                    
+                    st.success(f"¡Éxito! Base generada. (Cruce realizado con VENTA SUBTOTAL: Columna J)")
                     st.dataframe(df_final.head(10))
                     
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
@@ -267,12 +292,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    st.download_button(
-                        f"📥 Descargar {nombre_archivo}", 
-                        data=buffer.getvalue(), 
-                        file_name=nombre_archivo, 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), file_name=nombre_archivo, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         except Exception as e:
             st.error(f"Error Técnico: {e}")
