@@ -11,16 +11,12 @@ st.set_page_config(page_title="Generador Master BPro", layout="wide")
 if 'id_limpieza' not in st.session_state:
     st.session_state['id_limpieza'] = 0
 
-# --- FUNCIÓN PARA REINICIAR ---
 def reset_all():
     st.session_state['id_limpieza'] += 1
 
-# --- SIDEBAR Y CONFIGURACIÓN ---
 with st.sidebar:
     st.header("⚙️ Configuración")
-    
-    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", help="Borra los archivos y reinicia la memoria")
-    
+    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary")
     st.markdown("---")
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
@@ -31,11 +27,9 @@ st.markdown("""
 1. Sube los archivos.
 2. Genera la base.
 3. Descarga.
-4. **Presiona "LIMPIAR" en la barra lateral antes de cargar nuevos archivos.**
 """)
 
 # --- FUNCIONES AUXILIARES ---
-
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
     cleaned = re.sub(r'[^\w\s]', '', text) 
@@ -83,12 +77,11 @@ def safe_get(row, index, default=None):
         return val
     except IndexError: return default
 
-# --- PROCESAMIENTO DE VENDEDORES (ACTUALIZADO: COLUMNA J - VENTA SUBTOTAL) ---
+# --- PROCESAMIENTO DE VENDEDORES (LEE SUBTOTAL Y UTILIDAD) ---
 def process_vendedores_file(uploaded_file):
-    # Leemos todo el excel
     df = pd.read_excel(uploaded_file, header=None)
     
-    mapping_data = [] # Lista para guardar: {FACTURA, SUBTOTAL, VENDEDOR}
+    mapping_data = [] 
     current_vendedor = "SIN VENDEDOR"
     
     for index, row in df.iterrows():
@@ -99,18 +92,25 @@ def process_vendedores_file(uploaded_file):
             continue
             
         if any(char.isdigit() for char in text_a):
-            # === CAMBIO SOLICITADO ===
-            # Ahora leemos la Columna J (Índice 9 en Python: A=0, ... J=9)
+            # 1. SUBTOTAL (Columna F - Índice 5)
             try:
-                # safe_get usa tu funcion auxiliar, o acceso directo si el df tiene suficientes cols
-                val_subtotal = row[9] if len(row) > 9 else 0
-                subtotal_float = float(str(val_subtotal).replace(',', '').replace('$', ''))
+                val_sub = row[5] if len(row) > 5 else 0
+                sub_float = float(str(val_sub).replace(',', '').replace('$', ''))
             except:
-                subtotal_float = 0.0
+                sub_float = 0.0
+
+            # 2. UTILIDAD (Columna N - Índice 13)
+            # Nota: Si tu archivo de vendedores tiene la utilidad en otra columna, ajusta el índice 13.
+            try:
+                val_util = row[13] if len(row) > 13 else 0
+                util_float = float(str(val_util).replace(',', '').replace('$', ''))
+            except:
+                util_float = 0.0
             
             mapping_data.append({
                 "FACTURA_MATCH": text_a,
-                "SUBTOTAL_MATCH": round(subtotal_float, 2), # Redondeo de seguridad
+                "SUBTOTAL_MATCH": round(sub_float, 2),
+                "UTILIDAD_MATCH": round(util_float, 2),
                 "VENDEDOR": current_vendedor
             })
         else:
@@ -162,13 +162,17 @@ def process_main_bpro(uploaded_file):
                 continue
 
             if current_client and current_factura:
-                # Limpieza de valores numéricos clave
                 try:
-                    # Columna H es indice 7 (VENTA SUBTOTAL)
+                    # SUBTOTAL (Col H - Index 7)
                     subtotal_val = safe_get(row, 7, 0)
                     subtotal_clean = float(str(subtotal_val).replace(',', ''))
+                    
+                    # UTILIDAD (Col K - Index 10)
+                    utilidad_val = safe_get(row, 10, 0)
+                    utilidad_clean = float(str(utilidad_val).replace(',', ''))
                 except:
                     subtotal_clean = 0.0
+                    utilidad_clean = 0.0
 
                 clean_row = {
                     "SUCURSAL": "PENDIENTE",
@@ -184,10 +188,10 @@ def process_main_bpro(uploaded_file):
                     "COSTO": safe_get(row, 4, 0),
                     "PRECIO": safe_get(row, 5, 0),
                     "COSTO DE VENTA": safe_get(row, 6, 0),
-                    "VENTA SUBTOTAL": subtotal_clean, # Guardamos limpio
+                    "VENTA SUBTOTAL": subtotal_clean,
                     "IVA": safe_get(row, 8, 0),
                     "VENTA TOTAL": safe_get(row, 9, 0),
-                    "UTILIDAD": safe_get(row, 10, 0)
+                    "UTILIDAD": utilidad_clean
                 }
                 all_clean_rows.append(clean_row)
 
@@ -212,10 +216,10 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
         try:
             with st.spinner('Procesando datos y cruzando información...'):
                 
-                # 1. Mapas (Ahora devuelve Tabla con Factura y Subtotal)
+                # 1. Obtener datos de vendedores (Tabla con Factura, Subtotal y Utilidad)
                 df_vendedores_map = process_vendedores_file(file_vendedores)
                 
-                # 2. Limpieza
+                # 2. Obtener datos BPro
                 df_limpio = process_main_bpro(file_sucio)
                 
                 if df_limpio.empty:
@@ -223,28 +227,48 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 else:
                     df_limpio['SUCURSAL'] = sucursal
                     
-                    # Preparar columnas clave para el cruce (MATCH)
-                    # 1. Factura
+                    # --- PREPARACIÓN DE LLAVES DE CRUCE ---
                     df_limpio['FACTURA_MATCH'] = df_limpio['FACTURA'].astype(str).str.strip()
                     df_vendedores_map['FACTURA_MATCH'] = df_vendedores_map['FACTURA_MATCH'].astype(str).str.strip()
                     
-                    # 2. SUBTOTAL (Ahora usamos VENTA SUBTOTAL en lugar de Utilidad)
-                    # df_limpio['VENTA SUBTOTAL'] ya es float desde process_main_bpro
+                    # Llave 1: SUBTOTAL
                     df_limpio['SUBTOTAL_MATCH'] = df_limpio['VENTA SUBTOTAL'].round(2)
                     df_vendedores_map['SUBTOTAL_MATCH'] = df_vendedores_map['SUBTOTAL_MATCH'].round(2)
+                    
+                    # Llave 2: UTILIDAD
+                    df_limpio['UTILIDAD_MATCH'] = df_limpio['UTILIDAD'].round(2)
+                    df_vendedores_map['UTILIDAD_MATCH'] = df_vendedores_map['UTILIDAD_MATCH'].round(2)
 
-                    # === CRUCE POR FACTURA Y VENTA SUBTOTAL ===
-                    df_merged = pd.merge(
-                        df_limpio, 
-                        df_vendedores_map, 
-                        on=['FACTURA_MATCH', 'SUBTOTAL_MATCH'], 
+                    # === ESTRATEGIA DE CRUCE EN CASCADA (FALLBACK) ===
+                    
+                    # INTENTO 1: Cruce por FACTURA + SUBTOTAL
+                    df_merge_1 = pd.merge(
+                        df_limpio,
+                        df_vendedores_map[['FACTURA_MATCH', 'SUBTOTAL_MATCH', 'VENDEDOR']],
+                        on=['FACTURA_MATCH', 'SUBTOTAL_MATCH'],
                         how='left'
                     )
                     
-                    df_merged['VENDEDOR'] = df_merged['VENDEDOR'].fillna("Sin Vendedor")
-                    df_limpio = df_merged 
+                    # INTENTO 2: Cruce por FACTURA + UTILIDAD
+                    df_merge_2 = pd.merge(
+                        df_limpio,
+                        df_vendedores_map[['FACTURA_MATCH', 'UTILIDAD_MATCH', 'VENDEDOR']],
+                        on=['FACTURA_MATCH', 'UTILIDAD_MATCH'],
+                        how='left',
+                        suffixes=('_sub', '_util')
+                    )
+                    
+                    # === LA LÓGICA MAESTRA ===
+                    # Si el Intento 1 encontró vendedor (no es nulo), úsalo.
+                    # Si el Intento 1 falló (es nulo o era 0), usa lo que encontró el Intento 2.
+                    
+                    # Combinamos las columnas: Prioridad Vendedor_sub (Subtotal), si falta, usa Vendedor_util (Utilidad)
+                    df_limpio['VENDEDOR'] = df_merge_1['VENDEDOR'].combine_first(df_merge_2['VENDEDOR'])
+                    
+                    # Si aun así no encuentra nada, poner "Sin Vendedor"
+                    df_limpio['VENDEDOR'] = df_limpio['VENDEDOR'].fillna("Sin Vendedor")
 
-                    # --- CONTINUA EL PROCESO DE CATALOGO Y CALCULOS ---
+                    # --- CONTINUA EL PROCESO ---
                     df_update = pd.read_excel(file_catalogo)
                     df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
                     df_update['NP'] = df_update['NP'].astype(str).str.strip()
@@ -262,7 +286,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     for col in cols_numericas:
                         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
 
-                    # Corregir signos en devoluciones
                     mask_error_bpro = (df_final['CANTIDAD'] < 0) & (df_final['COSTO DE VENTA'] > 0)
                     df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] = df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] * -1
                     df_final.loc[mask_error_bpro, 'UTILIDAD'] = df_final.loc[mask_error_bpro, 'VENTA SUBTOTAL'] - df_final.loc[mask_error_bpro, 'COSTO DE VENTA']
@@ -284,7 +307,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                         if col not in df_final.columns: df_final[col] = 0 
                     df_final = df_final[cols_finales]
                     
-                    st.success(f"¡Éxito! Base generada. (Cruce realizado con VENTA SUBTOTAL: Columna J)")
+                    st.success(f"¡Éxito! Base generada con Lógica Cascada (Subtotal -> Utilidad).")
                     st.dataframe(df_final.head(10))
                     
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
