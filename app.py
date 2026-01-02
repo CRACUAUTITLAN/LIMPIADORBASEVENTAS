@@ -31,8 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Corrección Final)")
-st.info("💡 Lógica Híbrida Activa: 1. Busca coincidencias al final de la factura (Orden Cronológico). 2. Si falla, usa lógica matemática (Francotirador).")
+st.title("🏭 Generador de Base Maestra (Versión Final)")
+st.info("💡 Lógica Activa: Búsqueda Cronológica Inversa. El sistema busca las ventas de los vendedores menores (ej. Alejandro) en los últimos movimientos de la factura primero.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -156,26 +156,35 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# 4. SOLVER MATEMÁTICO PURO
+# 4. SOLVER MATEMÁTICO (SUMA DE SUBCONJUNTOS)
 # ======================================================
 def subset_sum_solver(items, objetivo):
     """
-    Recibe una lista de items filtrados y busca la combinación exacta.
+    Busca una combinación exacta de items que sumen el objetivo.
+    items: lista de diccionarios [{'idx': 10, 'val': 100.50}, ...]
     """
-    tolerancia = Decimal("0.10")
+    tolerancia = Decimal("0.10") # Tolerancia para errores de punto flotante
     
-    # Probamos combinaciones de tamaño 1 hasta N
-    for r in range(1, len(items) + 1):
-        for combo in itertools.combinations(items, r):
+    # Ordenamos de mayor a menor para que encuentre sumas grandes rápido
+    # Esto optimiza la recursión
+    items_sorted = sorted(items, key=lambda x: abs(x["val"]), reverse=True)
+    
+    # Probamos combinaciones de tamaño 1 hasta 5 (raro que sean mas refacciones)
+    for r in range(1, min(len(items_sorted), 6) + 1):
+        for combo in itertools.combinations(items_sorted, r):
             suma = sum(x["val"] for x in combo)
             if abs(suma - objetivo) <= tolerancia:
                 return combo
     return None
 
+# ======================================================
+# 5. LÓGICA DE ASIGNACIÓN (BÚSQUEDA INVERSA)
+# ======================================================
 def apply_vendor_logic_smart(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
 
     for factura, g in df.groupby("FACTURA"):
+        # Importante: Mantenemos el orden original del Excel (indices)
         indices = g.index
         candidatos = mapa_vendedores.get(factura, [])
 
@@ -185,7 +194,7 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
         total_global = g["GLOBAL_TOTAL_BPRO"].iloc[0]
         es_pos = total_global >= 0
 
-        # Preparamos metas
+        # Preparamos metas (montos a buscar)
         metas = []
         for c in candidatos:
             monto = c["POS"] if es_pos else c["NEG"]
@@ -199,57 +208,51 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # CASO 2: Múltiples Vendedores -> LÓGICA MIXTA (COLA + FRANCOTIRADOR)
+        # CASO 2: Múltiples Vendedores -> LÓGICA INTELIGENTE
         
-        # Obtenemos TODOS los items en su ORDEN ORIGINAL
+        # Obtenemos la lista de items preservando su ORDEN ORIGINAL
         items_todos = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
         usados = set()
         
-        # Ordenamos metas de MENOR a MAYOR (Alejandro primero, Hugo al final)
+        # Ordenamos metas: Buscamos primero los montos pequeños (Alejandro)
+        # y dejamos al vendedor más grande (Hugo) para el final.
         metas.sort(key=lambda x: abs(x["META"]), reverse=False)
         
-        # Iteramos sobre los vendedores PEQUEÑOS (todos menos el último)
+        # Iteramos sobre todos MENOS el último (Hugo se queda con el resto)
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
-            
             sol = None
             
-            # --- ESTRATEGIA A: LA LÓGICA DE "LOS ÚLTIMOS" (Cronológico) ---
-            # Verificamos si los items libres DEL FINAL suman la meta.
+            # --- ESTRATEGIA A: ZONA CALIENTE (LOS ÚLTIMOS MOVIMIENTOS) ---
+            # Asumimos que el vendedor "extra" capturó al final.
+            # Tomamos los items disponibles.
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            # Probamos sumar el último, luego los últimos 2, hasta los últimos 8.
-            for k in range(1, min(len(items_disponibles), 8) + 1):
-                cola = items_disponibles[-k:] 
-                suma_cola = sum(x["val"] for x in cola)
-                
-                if abs(suma_cola - objetivo) <= Decimal("0.10"):
-                    sol = cola
-                    break 
+            # Cortamos la lista para ver solo el final (Reverse slice).
+            # Miramos los últimos 20 renglones.
+            zona_caliente = items_disponibles[-20:] 
             
-            # --- ESTRATEGIA B: FRANCOTIRADOR MATEMÁTICO (Respaldo) ---
+            # Buscamos la combinación exacta en esa zona final
+            sol = subset_sum_solver(zona_caliente, objetivo)
+            
+            # --- ESTRATEGIA B: BÚSQUEDA GLOBAL (SI FALLA LA A) ---
             if not sol:
-                # Solo si no funcionó mirar al final, buscamos por monto
-                candidatos_relevantes = [
-                    x for x in items_todos 
-                    if x["idx"] not in usados 
-                    and abs(x["val"]) <= (abs(objetivo) + Decimal("1.00"))
+                # Si no estaba al final, buscamos en TODO el documento pero filtrando por valor
+                # para no sobrecargar el sistema.
+                pool_global = [
+                    x for x in items_disponibles
+                    if abs(x["val"]) <= (abs(objetivo) + Decimal("5.00")) # Margen amplio
                 ]
-                # Ordenamos por valor para el solver
-                candidatos_relevantes.sort(key=lambda x: abs(x["val"]), reverse=True)
-                
-                sol = subset_sum_solver(candidatos_relevantes, objetivo)
+                sol = subset_sum_solver(pool_global, objetivo)
 
-            # ASIGNACIÓN
+            # --- APLICAR RESULTADO ---
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             
-            # Si no encuentra match, pasará al mayor.
-
-        # ASIGNACIÓN FINAL: EL RESTO ES DEL MAYOR
+        # ASIGNACIÓN FINAL: HUGO (O EL MAYOR) SE QUEDA CON EL RESTO
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         
@@ -259,7 +262,7 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
     return df
 
 # ======================================================
-# 5. EJECUCIÓN PRINCIPAL
+# 6. EJECUCIÓN PRINCIPAL
 # ======================================================
 uid = st.session_state['id_limpieza']
 
@@ -289,8 +292,8 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
             else:
                 df["SUCURSAL"] = sucursal
 
-                # 60% Cálculo Matemático
-                prog_bar.progress(60, text="🧮 Asignando Vendedores (Lógica Híbrida)...")
+                # 60% Cálculo Matemático (Lógica de Cola)
+                prog_bar.progress(60, text="🧮 Asignando Vendedores (Prioridad Últimos Movimientos)...")
                 df = apply_vendor_logic_smart(df, mapa)
                 
                 # 80% Catálogo
@@ -320,6 +323,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df_final["año"] = df_final["FECHA_DT"].dt.year
                 df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
                 df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
+                # Ordenamos por fecha y cliente, pero MANTENEMOS el orden relativo interno si es posible
                 df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
                 cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
