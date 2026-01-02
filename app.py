@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import re
+import time  # <--- AGREGA ESTO
 from datetime import datetime
 import itertools
 from decimal import Decimal, getcontext
