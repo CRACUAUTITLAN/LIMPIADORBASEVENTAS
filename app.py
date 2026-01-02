@@ -31,8 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Corrección Alejandro)")
-st.info("💡 Filtro Inteligente Activo: Para montos pequeños, el sistema ignora automáticamente las refacciones grandes para encontrar la coincidencia exacta.")
+st.title("🏭 Generador de Base Maestra (Corrección Final)")
+st.info("💡 Lógica Francotirador Activa: El sistema filtra primero los montos pequeños para encontrar coincidencias exactas incluso en facturas gigantes.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -78,9 +78,7 @@ def process_vendedores_file(uploaded_file):
 
         if any(c.isdigit() for c in texto):
             factura = texto
-            # Col B (Positivos)
             pos = Decimal(str(row[1]).replace(',', '').replace('$', '')) if len(row) > 1 and is_number(row[1]) else Decimal(0)
-            # Col F (Negativos)
             neg = Decimal(str(row[5]).replace(',', '').replace('$', '')) if len(row) > 5 and is_number(row[5]) else Decimal(0)
 
             vendedores_map.setdefault(factura, []).append({
@@ -158,32 +156,22 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# 4. SOLVER INTELIGENTE (FILTRO + RETRY)
+# 4. SOLVER MATEMÁTICO PURO
 # ======================================================
-def subset_exact_smart(items, objetivo):
+def subset_sum_solver(items, objetivo):
     """
-    Busca combinación exacta con estrategia de FILTRO.
-    Solo considera items que sean menores o iguales al objetivo (+ margen).
-    Esto evita que items grandes (de Hugo) estorben en la búsqueda de items pequeños (Alejandro).
+    Recibe una lista de items filtrados y busca la combinación exacta.
     """
-    # 1. PRE-FILTRO CRÍTICO:
-    # Si buscamos 114 pesos, ignoramos cualquier refacción mayor a 116 pesos.
-    # Esto reduce la lista de 50 items a solo los 3 o 4 pequeños posibles.
-    margen_filtro = Decimal("2.00")
-    items_candidatos = [x for x in items if x["val"] <= (objetivo + margen_filtro)]
+    # Tolerancia para errores de punto flotante/redondeo
+    tolerancia = Decimal("0.10")
     
-    # Ordenar mayor a menor (dentro de los candidatos) para acelerar
-    items_sorted = sorted(items_candidatos, key=lambda x: abs(x["val"]), reverse=True)
-    
-    # Tolerancias progresivas (Intento 1: estricto, Intento 2: flexible)
-    tolerancias = [Decimal("0.10"), Decimal("1.00")] 
-    
-    for tol in tolerancias:
-        for r in range(1, len(items_sorted) + 1):
-            for combo in itertools.combinations(items_sorted, r):
-                suma = sum(x["val"] for x in combo)
-                if abs(suma - objetivo) <= tol:
-                    return combo
+    # Probamos combinaciones de tamaño 1 hasta N
+    # Nota: Como la lista 'items' ya viene filtrada y pequeña, esto es rápido.
+    for r in range(1, len(items) + 1):
+        for combo in itertools.combinations(items, r):
+            suma = sum(x["val"] for x in combo)
+            if abs(suma - objetivo) <= tolerancia:
+                return combo
     return None
 
 def apply_vendor_logic_smart(df, mapa_vendedores):
@@ -195,9 +183,11 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
 
         if not candidatos: continue
 
+        # Signo de la factura
         total_global = g["GLOBAL_TOTAL_BPRO"].iloc[0]
         es_pos = total_global >= 0
 
+        # Preparamos metas
         metas = []
         for c in candidatos:
             monto = c["POS"] if es_pos else c["NEG"]
@@ -206,40 +196,50 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
         
         if not metas: continue
 
-        # CASO 1: Un solo vendedor -> Directo
+        # CASO 1: Vendedor Único -> Asignación directa
         if len(metas) == 1:
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # CASO 2: Múltiples vendedores -> ESTRATEGIA FILTRADA
-        items = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
+        # CASO 2: Múltiples Vendedores -> LÓGICA FRANCOTIRADOR
+        items_todos = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
         usados = set()
         
-        # Ordenamos: MENOR A MAYOR (Primero Alejandro con sus 114 pesos)
+        # Ordenamos metas de MENOR a MAYOR (Alejandro primero, Hugo al final)
         metas.sort(key=lambda x: abs(x["META"]), reverse=False)
         
-        # Iteramos sobre todos MENOS el último
+        # Iteramos sobre los vendedores PEQUEÑOS (todos menos el último)
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
+            objetivo = meta_actual["META"]
             
-            disponibles = [x for x in items if x["idx"] not in usados]
+            # === EL FILTRO DE ORO ===
+            # Solo consideramos items que sean menores o iguales al objetivo (+ margen)
+            # Si Alejandro busca $114, NO miramos refacciones de $500.
+            # Esto reduce la lista de 50 items a 3 o 4 items relevantes.
+            candidatos_relevantes = [
+                x for x in items_todos 
+                if x["idx"] not in usados 
+                and abs(x["val"]) <= (abs(objetivo) + Decimal("1.00"))
+            ]
             
-            # Usamos el Solver Inteligente que filtra items gigantes
-            sol = subset_exact_smart(disponibles, meta_actual["META"])
+            # Ordenamos los candidatos de Mayor a Menor para que el solver encuentre rápido (100 + 14 es mejor que 1+1+1...)
+            candidatos_relevantes.sort(key=lambda x: abs(x["val"]), reverse=True)
+            
+            # Ejecutamos el solver solo sobre esta lista pequeña
+            sol = subset_sum_solver(candidatos_relevantes, objetivo)
 
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
-            else:
-                # Si falló, es raro con el nuevo filtro, pero seguimos.
-                pass
+            
+            # Si no encuentra match (muy raro con este filtro), no asigna nada y pasará al mayor.
 
         # ASIGNACIÓN FINAL: EL RESTO ES DEL MAYOR
-        # Todo lo que no se pudo asignar (por diferencias mínimas o porque eran los items grandes)
-        # se le da al último vendedor (el más grande, Hugo).
+        # El último vendedor (Hugo) se queda con todo lo que sobró.
         vendedor_mayor = metas[-1]["VENDEDOR"]
-        remaining_indices = [x["idx"] for x in items if x["idx"] not in usados]
+        remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         
         if remaining_indices:
             df.loc[remaining_indices, "VENDEDOR"] = vendedor_mayor
@@ -260,7 +260,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
     if not (file_bpro and file_vend and file_cat):
         st.warning("⚠️ Sube los 3 archivos.")
     else:
-        # BARRA 1: PROCESAMIENTO
         prog_bar = st.progress(0, text="Iniciando motores...")
 
         try:
@@ -279,7 +278,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df["SUCURSAL"] = sucursal
 
                 # 60% Cálculo Matemático
-                prog_bar.progress(60, text="🧮 Asignando Vendedores (Filtro Inteligente)...")
+                prog_bar.progress(60, text="🧮 Asignando Vendedores (Filtro Francotirador)...")
                 df = apply_vendor_logic_smart(df, mapa)
                 
                 # 80% Catálogo
@@ -316,26 +315,22 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     if c not in df_final.columns: df_final[c] = 0
                 df_final = df_final[cols_fin]
 
-                # 100% Finalizado cálculo
+                # 100% Finalizado
                 prog_bar.progress(100, text="✅ Cálculo terminado.")
                 time.sleep(0.5)
                 prog_bar.empty()
 
-                # === RESULTADOS Y GENERACIÓN DE EXCEL ===
+                # === RESULTADOS ===
                 st.success(f"¡Base generada! ({len(df_final)} registros)")
-                
-                # Mostramos dataframe
                 st.dataframe(df_final.head(10))
                 
-                # BARRA 2: PREPARANDO DESCARGA
-                download_bar = st.progress(0, text="📁 Preparando archivo Excel para descarga...")
-                
+                download_bar = st.progress(0, text="📁 Preparando descarga...")
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    download_bar.progress(50, text="✍️ Escribiendo hojas de Excel...")
+                    download_bar.progress(50, text="✍️ Escribiendo Excel...")
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
-                download_bar.progress(100, text="🚀 ¡Archivo listo!")
+                download_bar.progress(100, text="🚀 ¡Listo!")
                 time.sleep(1)
                 download_bar.empty()
                 
