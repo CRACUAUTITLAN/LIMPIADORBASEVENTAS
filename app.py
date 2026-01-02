@@ -5,450 +5,355 @@ import io
 import re
 from datetime import datetime
 import itertools
+from decimal import Decimal, getcontext
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
+# ======================================================
+# CONFIGURACIÓN INICIAL
+# ======================================================
+# Configurar precisión para manejo de dinero exacto en Decimals
+getcontext().prec = 12
+
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
-# --- ESTADO DE LA SESIÓN ---
 if 'id_limpieza' not in st.session_state:
     st.session_state['id_limpieza'] = 0
 
 def reset_all():
     st.session_state['id_limpieza'] += 1
 
-# --- BARRA LATERAL ---
+# ======================================================
+# BARRA LATERAL (SIDEBAR)
+# ======================================================
 with st.sidebar:
     st.header("⚙️ Configuración")
-    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", help="Borra los archivos y reinicia la memoria")
+    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary")
     st.markdown("---")
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-# --- TÍTULO ---
-st.title("🏭 Generador de Base Maestra")
-st.markdown("""
-**Instrucciones:**
-1. Sube los archivos (BPro, Vendedores, Catálogo).
-2. Presiona "Generar Base Maestra".
-3. El sistema realizará el cruce matemático para asignar vendedores en facturas compartidas.
-""")
+st.title("🏭 Generador de Base Maestra (Versión Final)")
+st.info("💡 Lógica Híbrida Activa: Cálculo matemático exacto para facturas compartidas + Protección de rendimiento para facturas masivas.")
 
-# ==========================================
-#           FUNCIONES AUXILIARES
-# ==========================================
-
+# ======================================================
+# 1. FUNCIONES AUXILIARES
+# ======================================================
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
-    cleaned = re.sub(r'[^\w\s]', '', text) 
-    return cleaned.strip()
-
-def clean_text_general(text):
-    if not isinstance(text, str): return str(text)
-    return text.strip()
+    return re.sub(r'[^\w\s]', '', text).strip()
 
 def is_number(s):
-    if pd.isna(s): return False
     try:
-        float(str(s).replace(',', '')) 
+        float(str(s).replace(',', ''))
         return True
-    except ValueError:
-        return False
-
-def get_mes_espanol(fecha):
-    if pd.isna(fecha): return "DESCONOCIDO"
-    try:
-        meses = {
-            1: "ENERO", 2: "FEBRERO", 3: "MARZO", 4: "ABRIL",
-            5: "MAYO", 6: "JUNIO", 7: "JULIO", 8: "AGOSTO",
-            9: "SEPTIEMBRE", 10: "OCTUBRE", 11: "NOVIEMBRE", 12: "DICIEMBRE"
-        }
-        return meses.get(fecha.month, "DESCONOCIDO")
-    except:
-        return "DESCONOCIDO"
+    except: return False
 
 def is_valid_date(value):
-    if pd.isna(value): return False
-    if isinstance(value, (datetime, pd.Timestamp)): return True
-    if isinstance(value, str):
-        try:
-            pd.to_datetime(value, dayfirst=True)
-            if '/' in value or '-' in value: return True
-        except:
-            return False
-    return False
+    try:
+        pd.to_datetime(value, dayfirst=True)
+        return True
+    except: return False
 
 def safe_get(row, index, default=None):
     try:
         val = row[index]
-        if pd.isna(val) or val == "": return default
-        return val
-    except IndexError: return default
+        return default if (pd.isna(val) or val == "") else val
+    except: return default
 
-# ==========================================
-#      PROCESAMIENTO DE VENDEDORES
-# ==========================================
+def get_mes_espanol(fecha):
+    meses = {1:"ENERO", 2:"FEBRERO", 3:"MARZO", 4:"ABRIL", 5:"MAYO", 6:"JUNIO", 
+             7:"JULIO", 8:"AGOSTO", 9:"SEPTIEMBRE", 10:"OCTUBRE", 11:"NOVIEMBRE", 12:"DICIEMBRE"}
+    return meses.get(fecha.month, "DESCONOCIDO")
+
+# ======================================================
+# 2. PROCESAMIENTO DE VENDEDORES (Escáner Dual)
+# ======================================================
 def process_vendedores_file(uploaded_file):
     """
-    Crea un diccionario donde la llave es la FACTURA y el valor es una lista
-    de candidatos con sus montos esperados (Positivos y Negativos).
+    Lee el archivo de agentes.
+    Detecta montos en Columna B (Positivos/Ventas) y Columna F (Negativos/Devoluciones).
+    Crea un mapa maestro {Factura: [Lista de Vendedores y sus Metas]}
     """
     df = pd.read_excel(uploaded_file, header=None)
-    
-    # Estructura: { 'FACTURA': [ {'Vendedor': 'Hugo', 'Monto_Pos': 100, 'Monto_Neg': 0}, ... ] }
-    vendedores_map = {} 
+    vendedores_map = {}
     current_vendedor = "SIN VENDEDOR"
-    
-    for index, row in df.iterrows():
-        item_a = row[0]
-        text_a = str(item_a).strip()
+
+    for _, row in df.iterrows():
+        texto = str(row[0]).strip()
         
-        if text_a.lower() in ["venta", "nan", ""] or pd.isna(item_a):
+        # Saltar basura
+        if not texto or texto.lower() in ["venta", "nan"]: 
             continue
-            
-        if any(char.isdigit() for char in text_a):
-            factura = text_a
-            
-            # --- COLUMNA B (Positivos) ---
-            val_b_clean = 0.0
-            try:
-                val_b = row[1] if len(row) > 1 else 0
-                val_b_clean = float(str(val_b).replace(',', '').replace('$', '').replace(' ', ''))
-            except:
-                val_b_clean = 0.0
 
-            # --- COLUMNA F (Negativos) ---
-            val_f_clean = 0.0
-            try:
-                val_f = row[5] if len(row) > 5 else 0
-                val_f_clean = float(str(val_f).replace(',', '').replace('$', '').replace(' ', ''))
-            except:
-                val_f_clean = 0.0
+        # Si tiene dígitos, asumimos que es FACTURA
+        if any(c.isdigit() for c in texto):
+            factura = texto
             
-            if factura not in vendedores_map:
-                vendedores_map[factura] = []
+            # Leer Columna B (Index 1) -> Ventas Positivas
+            pos = Decimal(str(row[1]).replace(',', '').replace('$', '')) if len(row) > 1 and is_number(row[1]) else Decimal(0)
             
-            vendedores_map[factura].append({
-                'Vendedor': current_vendedor,
-                'Monto_Pos': val_b_clean,
-                'Monto_Neg': val_f_clean
+            # Leer Columna F (Index 5) -> Devoluciones/Negativos
+            neg = Decimal(str(row[5]).replace(',', '').replace('$', '')) if len(row) > 5 and is_number(row[5]) else Decimal(0)
+
+            vendedores_map.setdefault(factura, []).append({
+                "VENDEDOR": current_vendedor,
+                "POS": pos,
+                "NEG": neg
             })
-
         else:
-            current_vendedor = text_a
-            
+            # Si es texto sin números, es el NOMBRE DEL VENDEDOR
+            current_vendedor = texto
+
     return vendedores_map
 
-# ==========================================
-#         PROCESAMIENTO BPRO (SUCIO)
-# ==========================================
+# ======================================================
+# 3. PROCESAMIENTO BPRO (Lectura Raw)
+# ======================================================
 def process_main_bpro(uploaded_file):
     """
-    Extrae la data de BPro.
-    NUEVO: Captura el TOTAL DE FACTURA (Col G) del encabezado para saber
-    si debemos buscar en positivos o negativos.
+    Lee BPro. Captura el TOTAL GLOBAL (Col G) para saber el signo de la factura.
+    Captura VENTA SUBTOTAL (Col H) de cada partida para hacer el match matemático.
     """
-    xls = pd.read_excel(uploaded_file, sheet_name=None, header=None, engine='xlrd')
-    all_clean_rows = []
+    try: 
+        xls = pd.read_excel(uploaded_file, sheet_name=None, header=None)
+    except: 
+        xls = pd.read_excel(uploaded_file, sheet_name=None, header=None, engine="xlrd")
+    
+    rows = []
+    current_client, current_factura, current_fecha = None, None, None
+    current_tipo, current_almacen = None, None
+    factura_total_global = Decimal(0)
 
-    current_client = None
-    current_factura = None
-    current_fecha = None
-    current_tipo = None
-    current_almacen = None
-    current_factura_total_global = 0.0 # Columna G del encabezado
+    for _, df in xls.items():
+        for row in df.values.tolist():
+            col_a = str(safe_get(row, 0, "")).strip()
+            col_b = str(safe_get(row, 1, "")).strip()
+            col_c = safe_get(row, 2)
 
-    for sheet_name, df in xls.items():
-        data = df.values.tolist()
-        for row in data:
-            col_a_raw = safe_get(row, 0, "")
-            col_a_str = str(col_a_raw).strip()
-            col_b_raw = safe_get(row, 1, "")
-            col_b_str = str(col_b_raw).strip()
-            col_c_raw = safe_get(row, 2, None)
-
-            if "Utilidad" in col_b_str:
-                current_client = clean_client_name(col_a_str)
-                current_factura = None 
-                continue
-
-            if col_a_str.startswith("Totales de:"):
-                current_client = None
+            # Detectar Cliente
+            if "Utilidad" in col_b:
+                current_client = clean_client_name(col_a)
                 current_factura = None
                 continue
 
-            # --- DETECCIÓN DE ENCABEZADO DE FACTURA ---
-            if is_number(col_b_raw) and is_valid_date(col_c_raw):
-                current_factura = col_a_str
-                current_fecha = col_c_raw
-                current_tipo = safe_get(row, 3, "")
-                current_almacen = safe_get(row, 4, "")
+            if col_a.startswith("Totales"):
+                current_client, current_factura = None, None
+                continue
+
+            # Detectar Encabezado Factura (Tiene Total Global en Col G / Index 6)
+            if is_number(row[1]) and is_valid_date(col_c):
+                current_factura = col_a
+                current_fecha = col_c
+                current_tipo = safe_get(row, 3)
+                current_almacen = safe_get(row, 4)
                 
-                # NUEVO: Capturar el Total Global de la Factura (Columna G = Index 6)
-                try:
-                    val_g = safe_get(row, 6, 0)
-                    current_factura_total_global = float(str(val_g).replace(',', ''))
-                except:
-                    current_factura_total_global = 0.0
+                # CLAVE: Capturamos el total de la factura para saber si es + o -
+                factura_total_global = Decimal(str(safe_get(row, 6, 0)).replace(',', ''))
                 continue
 
-            if col_a_str in ["ID Parte", "nan", "", "Diario de Ventas", "Página"]:
-                continue
-            if "Diario de Ventas" in col_a_str or "Página" in col_a_str:
-                continue
+            if col_a in ["ID Parte", "nan", "", "Diario de Ventas", "Página"]: continue
 
-            # --- DETECCIÓN DE PARTIDAS (ITEMS) ---
+            # Detectar Partidas (Items)
             if current_client and current_factura:
                 try:
-                    subtotal_val = safe_get(row, 7, 0) # Col H
-                    subtotal_clean = float(str(subtotal_val).replace(',', ''))
-                    
-                    utilidad_val = safe_get(row, 10, 0) # Col K
-                    utilidad_clean = float(str(utilidad_val).replace(',', ''))
-                except:
-                    subtotal_clean = 0.0
-                    utilidad_clean = 0.0
+                    subtotal = Decimal(str(safe_get(row, 7, 0)).replace(',', '')) # Col H
+                    utilidad = Decimal(str(safe_get(row, 10, 0)).replace(',', '')) # Col K
+                except: 
+                    subtotal, utilidad = Decimal(0), Decimal(0)
 
-                clean_row = {
+                rows.append({
                     "SUCURSAL": "PENDIENTE",
                     "CLIENTE": current_client,
                     "FACTURA": current_factura,
-                    "GLOBAL_TOTAL_BPRO": current_factura_total_global, # Dato clave para decidir signo
-                    "NP": col_a_str,              
-                    "DESCR": col_b_str,
-                    "LINEA": str(safe_get(row, 2, "")),        
-                    "FECHA": current_fecha if current_fecha else "Sin Fecha",
-                    "TIPO": current_tipo,     
-                    "ALMACEN": current_almacen,   
+                    "GLOBAL_TOTAL_BPRO": factura_total_global, # Guardamos el total global para referencia
+                    "NP": col_a,
+                    "DESCR": col_b,
+                    "LINEA": str(safe_get(row, 2, "")),
+                    "FECHA": current_fecha,
+                    "TIPO": current_tipo,
+                    "ALMACEN": current_almacen,
                     "CANTIDAD": safe_get(row, 3, 0),
                     "COSTO": safe_get(row, 4, 0),
                     "PRECIO": safe_get(row, 5, 0),
                     "COSTO DE VENTA": safe_get(row, 6, 0),
-                    "VENTA SUBTOTAL": subtotal_clean, 
+                    "VENTA SUBTOTAL": subtotal,
                     "IVA": safe_get(row, 8, 0),
                     "VENTA TOTAL": safe_get(row, 9, 0),
-                    "UTILIDAD": utilidad_clean
-                }
-                all_clean_rows.append(clean_row)
+                    "UTILIDAD": utilidad
+                })
+    return pd.DataFrame(rows)
 
-    return pd.DataFrame(all_clean_rows)
+# ======================================================
+# 4. LÓGICA MATEMÁTICA "SUBSET SUM" (Con Válvula de Seguridad)
+# ======================================================
+def subset_exact_safe(items, objetivo, max_items=15):
+    """
+    Intenta encontrar qué combinación de 'items' suma exactamente el 'objetivo'.
+    SEGURIDAD: Si hay más de 'max_items', aborta para evitar colgar el servidor.
+    """
+    # 1. Válvula de Seguridad: Si es una factura gigante, no arriesgar
+    if len(items) > max_items:
+        return None 
+        
+    tolerancia = Decimal("0.05") # 5 centavos de tolerancia
+    
+    # 2. Fuerza Bruta Controlada
+    for r in range(1, len(items) + 1):
+        for combo in itertools.combinations(items, r):
+            suma = sum(x["val"] for x in combo)
+            if abs(suma - objetivo) <= tolerancia:
+                return combo # ¡Match encontrado!
+    return None
 
-# ==========================================
-#     ALGORITMO DE DISTRIBUCIÓN (LA MAGIA)
-# ==========================================
-def solve_subset_sum(items, targets, tolerance=0.05):
+def apply_vendor_logic_safe(df, mapa_vendedores):
     """
-    items: lista de diccionarios [{'idx': 0, 'val': 100}, {'idx': 1, 'val': 50}]
-    targets: lista de diccionarios [{'Vendedor': 'Hugo', 'Meta': 100}, {'Vendedor': 'Alex', 'Meta': 50}]
-    
-    Retorna un diccionario {idx_item: Vendedor}
+    Orquesta la asignación.
+    - Si es 1 vendedor -> Asigna directo.
+    - Si son varios -> Usa matemáticas.
+    - Si falla matemáticas o es muy grande -> Asigna al mayoritario (Plan B).
     """
-    assignment = {}
-    remaining_items = items.copy()
-    
-    # Ordenamos targets para tratar de llenar primero los más grandes o específicos
-    # (Estrategia simple, puede mejorarse)
-    
-    for target in targets:
-        vendedor = target['Vendedor']
-        meta = target['Meta']
-        
-        if meta == 0:
-            continue
-            
-        # Buscamos combinaciones de items restantes que sumen 'meta'
-        found_subset = False
-        
-        # Probamos combinaciones de tamaño 1 hasta N
-        # Limitamos N para que no se cuelgue si hay demasiados items (ej. max 6 items combinados)
-        # Si la factura es muy compleja, puede requerir más lógica, pero esto cubre el 99%
-        max_r = len(remaining_items) + 1 if len(remaining_items) < 12 else 12
-        
-        for r in range(1, max_r):
-            for combo in itertools.combinations(remaining_items, r):
-                current_sum = sum(x['val'] for x in combo)
-                
-                # Checamos si la suma coincide con tolerancia
-                if abs(current_sum - meta) <= tolerance:
-                    # ¡MATCH ENCONTRADO!
-                    for item in combo:
-                        assignment[item['idx']] = vendedor
-                        remaining_items.remove(item)
-                    found_subset = True
-                    break
-            if found_subset:
-                break
-                
-        if not found_subset:
-            # Si no encontramos match exacto, podríamos tener un problema de remanente
-            # O simplemente asignamos al primer vendedor (fallback)
-            pass
+    df["VENDEDOR"] = "Sin Vendedor"
 
-    # Si sobraron items sin asignar (por errores de centavos o complejidad),
-    # se los asignamos al último vendedor procesado o al primero de la lista
-    if remaining_items and targets:
-        fallback_vendedor = targets[0]['Vendedor']
-        for item in remaining_items:
-            assignment[item['idx']] = fallback_vendedor
-            
-    return assignment
-
-def apply_vendor_logic_advanced(df_bpro, mapa_vendedores):
-    """
-    Aplica la lógica de negocio:
-    1. Revisa si el Total Global (Col G) es Positivo o Negativo.
-    2. Busca los candidatos en el mapa de vendedores.
-    3. Si es factura compartida, ejecuta el algoritmo de suma.
-    """
-    df_bpro['VENDEDOR'] = "Sin Vendedor"
-    
-    # Agrupamos por Factura para procesar cada una como un bloque independiente
-    for factura, group in df_bpro.groupby('FACTURA'):
-        
-        # Obtenemos índices del grupo original para poder escribir la respuesta
-        indices = group.index.tolist()
-        
-        # 1. Determinamos Signo según Columna G (Encabezado)
-        total_global = group['GLOBAL_TOTAL_BPRO'].iloc[0] # El valor es igual para todo el grupo
-        es_positivo = total_global >= 0
-        
-        # 2. Buscamos candidatos en Vendedores
+    # Procesamos factura por factura (Grupo por Grupo)
+    for factura, g in df.groupby("FACTURA"):
+        indices = g.index
         candidatos = mapa_vendedores.get(factura, [])
-        
-        if not candidatos:
-            continue # Se queda "Sin Vendedor"
-            
-        # 3. Filtramos las metas correctas (Col B si es positivo, Col F si es negativo)
-        targets = []
+
+        if not candidatos: continue
+
+        # Determinar signo basado en BPro Col G
+        total_global = g["GLOBAL_TOTAL_BPRO"].iloc[0]
+        es_pos = total_global >= 0
+
+        # Crear lista de metas (Solo tomamos a quienes tengan saldo en la columna correcta)
+        metas = []
         for c in candidatos:
-            monto_meta = c['Monto_Pos'] if es_positivo else c['Monto_Neg']
-            if abs(monto_meta) > 0.01: # Solo consideramos si el vendedor tiene saldo en esa columna
-                targets.append({'Vendedor': c['Vendedor'], 'Meta': monto_meta})
+            monto = c["POS"] if es_pos else c["NEG"]
+            if abs(monto) > 0: 
+                metas.append({"VENDEDOR": c["VENDEDOR"], "META": monto})
         
-        if not targets:
+        if not metas: continue
+
+        # CASO 1: Un solo vendedor (95% de los casos) -> Asignación Directa Rápida
+        if len(metas) == 1:
+            df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
+
+        # CASO 2: Factura Compartida -> Intentar Match Matemático
+        items = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
+        usados = set()
+        
+        # Ordenamos metas: Intentar satisfacer primero al que pide más dinero (Mejor probabilidad de éxito)
+        metas.sort(key=lambda x: abs(x["META"]), reverse=True)
+        
+        fallo_matematico = False
+        
+        for meta in metas:
+            disponibles = [x for x in items if x["idx"] not in usados]
             
-        # CASO SENCILLO: Solo hay un vendedor reclamando esta factura
-        if len(targets) == 1:
-            df_bpro.loc[indices, 'VENDEDOR'] = targets[0]['Vendedor']
-            
-        # CASO COMPLEJO: Factura compartida (Hugo y Alejandro)
-        else:
-            # Preparamos los items (Partes) de BPro (Columna H = VENTA SUBTOTAL)
-            items = []
+            # Llamamos a la función segura
+            sol = subset_exact_safe(disponibles, meta["META"], max_items=15)
+
+            if sol:
+                for it in sol:
+                    df.at[it["idx"], "VENDEDOR"] = meta["VENDEDOR"]
+                    usados.add(it["idx"])
+            else:
+                fallo_matematico = True
+                
+        # PLAN DE RESPALDO (Si falló la matemática o activó la válvula de seguridad)
+        if fallo_matematico:
+            # Asignar todo lo sobrante al vendedor con la meta más grande (Lider)
+            # Esto evita dejar filas "Sin Vendedor" y evita crashes.
+            vendedor_lider = metas[0]["VENDEDOR"] 
             for idx in indices:
-                val_row = df_bpro.at[idx, 'VENTA SUBTOTAL']
-                items.append({'idx': idx, 'val': val_row})
-            
-            # Ejecutamos la magia matemática
-            resultado_asignacion = solve_subset_sum(items, targets)
-            
-            # Escribimos los resultados en el DataFrame
-            for idx, vendedor_asignado in resultado_asignacion.items():
-                df_bpro.at[idx, 'VENDEDOR'] = vendedor_asignado
+                if df.at[idx, "VENDEDOR"] == "Sin Vendedor":
+                    df.at[idx, "VENDEDOR"] = vendedor_lider
 
-    return df_bpro
+    return df
 
-# ==========================================
-#              INTERFAZ DE CARGA
-# ==========================================
-st.subheader("1. Carga de Archivos")
-col1, col2, col3 = st.columns(3)
-
+# ======================================================
+# 5. EJECUCIÓN PRINCIPAL (MAIN)
+# ======================================================
 uid = st.session_state['id_limpieza']
 
-with col1:
-    file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"sucio_{uid}")
-with col2:
-    file_vendedores = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"vend_{uid}")
-with col3:
-    file_catalogo = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key=f"cat_{uid}")
+# Selectores de archivo
+file_bpro = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"b_{uid}")
+file_vend = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
+file_cat = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xls", "xlsx"], key=f"c_{uid}")
 
-# ==========================================
-#           LOGICA PRINCIPAL (EJECUCIÓN)
-# ==========================================
 if st.button("🚀 GENERAR BASE MAESTRA"):
-    if file_sucio and file_catalogo and file_vendedores:
-        try:
-            with st.spinner('Procesando datos y realizando cruce matemático...'):
+    if not (file_bpro and file_vend and file_cat):
+        st.warning("⚠️ Por favor, sube los 3 archivos para continuar.")
+    else:
+        with st.spinner("Procesando datos, cruzando matemáticas y limpiando..."):
+            
+            try:
+                # 1. Mapas de Vendedores
+                mapa = process_vendedores_file(file_vend)
                 
-                # 1. Procesar Vendedores (Crear Mapa de Metas)
-                mapa_vendedores = process_vendedores_file(file_vendedores)
-                
-                # 2. Procesar BPro (Obtener filas y Total Global G)
-                df_bpro_raw = process_main_bpro(file_sucio)
-                
-                if df_bpro_raw.empty:
-                    st.error("No se encontraron registros en BPro.")
+                # 2. Leer BPro
+                df = process_main_bpro(file_bpro)
+                if df.empty:
+                    st.error("Error: El archivo BPro parece estar vacío o con formato irreconocible.")
                 else:
-                    df_bpro_raw['SUCURSAL'] = sucursal
-                    df_bpro_raw['FACTURA'] = df_bpro_raw['FACTURA'].astype(str).str.strip()
+                    df["SUCURSAL"] = sucursal
+
+                    # 3. APLICAR LÓGICA DE ASIGNACIÓN (EL CORAZÓN DEL PROGRAMA)
+                    df = apply_vendor_logic_safe(df, mapa)
+
+                    # 4. Cruce con Catálogo
+                    df_cat = pd.read_excel(file_cat)
+                    df["NP"] = df["NP"].astype(str).str.strip()
+                    df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
                     
-                    # === APLICACIÓN DE LA LÓGICA AVANZADA ===
-                    # Aquí es donde ocurre la distribución inteligente
-                    df_limpio = apply_vendor_logic_advanced(df_bpro_raw, mapa_vendedores)
-                    
-                    # --- PASO 4: CRUCE CON CATÁLOGO ---
-                    df_update = pd.read_excel(file_catalogo)
-                    df_limpio['NP'] = df_limpio['NP'].astype(str).str.strip()
-                    df_update['NP'] = df_update['NP'].astype(str).str.strip()
-                    
-                    df_final = pd.merge(df_limpio, df_update[['NP', 'LINEA', 'CATEGORIA']], 
+                    df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], 
                                       on='NP', how='left', suffixes=('_orig', '_new'))
                     
-                    # Lógica de relleno de catálogo
-                    mask_sin_catalogo = df_final['CATEGORIA'].isna()
-                    df_final.loc[mask_sin_catalogo, 'DESCR'] = 'X DEFINIR'
+                    # Rellenos de Catálogo
+                    mask_nocat = df_final['CATEGORIA'].isna()
+                    df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
                     df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
                     
-                    # --- PASO 5: CORRECCIONES FINALES DE UTILIDAD (NO TOCADAS) ---
-                    # Se mantiene tu lógica original para corregir signos en devoluciones
-                    cols_numericas = ['CANTIDAD', 'COSTO DE VENTA', 'VENTA SUBTOTAL', 'UTILIDAD']
-                    for col in cols_numericas:
-                        df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
+                    # 5. Correcciones Numéricas Finales (Devoluciones)
+                    for col in ["CANTIDAD", "COSTO DE VENTA", "VENTA SUBTOTAL", "UTILIDAD"]:
+                        df_final[col] = pd.to_numeric(df_final[col], errors="coerce").fillna(0)
 
-                    mask_error_bpro = (df_final['CANTIDAD'] < 0) & (df_final['COSTO DE VENTA'] > 0)
-                    df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] = df_final.loc[mask_error_bpro, 'COSTO DE VENTA'] * -1
-                    # Recalcular utilidad con el costo correcto
-                    df_final.loc[mask_error_bpro, 'UTILIDAD'] = df_final.loc[mask_error_bpro, 'VENTA SUBTOTAL'] - df_final.loc[mask_error_bpro, 'COSTO DE VENTA']
-                    
-                    # --- PASO 6: FECHAS Y ORDEN ---
-                    df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA'], dayfirst=True, errors='coerce')
+                    # Si Cantidad es Negativa y Costo Positivo -> Invertir Costo
+                    mask_err = (df_final["CANTIDAD"] < 0) & (df_final["COSTO DE VENTA"] > 0)
+                    df_final.loc[mask_err, "COSTO DE VENTA"] *= -1
+                    # Recalcular utilidad
+                    df_final.loc[mask_err, "UTILIDAD"] = df_final.loc[mask_err, "VENTA SUBTOTAL"] - df_final.loc[mask_err, "COSTO DE VENTA"]
+
+                    # 6. Fechas y Formato
+                    df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
                     if anio_texto.isdigit():
-                        anio_num = int(anio_texto)
-                        df_final = df_final[df_final['FECHA_DT'].dt.year == anio_num]
+                        df_final = df_final[df_final["FECHA_DT"].dt.year == int(anio_texto)]
+
+                    df_final["año"] = df_final["FECHA_DT"].dt.year
+                    df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
+                    df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
-                    df_final['año'] = df_final['FECHA_DT'].dt.year
-                    df_final['mes'] = df_final['FECHA_DT'].apply(get_mes_espanol)
+                    # Ordenar
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
-                    df_final['FECHA'] = df_final['FECHA_DT'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
-                    
-                    # Selección de columnas finales
-                    cols_finales = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
-                    
-                    # Asegurar que existan todas
-                    for col in cols_finales:
-                        if col not in df_final.columns: df_final[col] = 0 
-                    df_final = df_final[cols_finales]
-                    
-                    # --- FIN: MOSTRAR Y DESCARGAR ---
-                    st.success(f"¡Éxito! Base generada con distribución inteligente de vendedores.")
+
+                    # Selección Final de Columnas
+                    cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
+                    for c in cols_fin:
+                        if c not in df_final.columns: df_final[c] = 0
+                    df_final = df_final[cols_fin]
+
+                    # 7. Descarga
+                    st.success(f"¡Base generada exitosamente! ({len(df_final)} registros procesados)")
                     st.dataframe(df_final.head(10))
                     
-                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    st.download_button(
-                        label=f"📥 Descargar {nombre_archivo}", 
-                        data=buffer.getvalue(), 
-                        file_name=nombre_archivo, 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-        except Exception as e:
-            st.error(f"Error Técnico: {e}")
-            st.write("Detalle del error:", e)
-    else:
-        st.warning("⚠️ Por favor sube los 3 archivos para continuar.")
+                    st.download_button(f"📥 Descargar {sucursal}", data=buffer.getvalue(), 
+                                     file_name=f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx",
+                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            
+            except Exception as e:
+                st.error(f"Error Técnico Inesperado: {e}")
