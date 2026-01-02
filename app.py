@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime
 import itertools
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, ROUND_HALF_UP
 
 # ======================================================
 # CONFIGURACIÓN INICIAL
@@ -31,8 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Versión Final)")
-st.info("💡 Lógica Activa: Búsqueda Cronológica Inversa. El sistema busca las ventas de los vendedores menores (ej. Alejandro) en los últimos movimientos de la factura primero.")
+st.title("🏭 Generador de Base Maestra (Versión Blindada)")
+st.info("💡 Lógica Activa: Limpieza agresiva de montos + Búsqueda cronológica inversa.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -41,11 +41,16 @@ def clean_client_name(text):
     if not isinstance(text, str): return str(text)
     return re.sub(r'[^\w\s]', '', text).strip()
 
-def is_number(s):
+def clean_currency_str(val):
+    """Limpia strings de moneda agresivamente para evitar errores de lectura."""
+    if pd.isna(val) or val == "": return Decimal(0)
+    s = str(val).replace('$', '').replace(',', '').strip()
+    # Eliminar cualquier caracter que no sea numero, punto o negativo
+    s = re.sub(r'[^\d.-]', '', s)
     try:
-        float(str(s).replace(',', ''))
-        return True
-    except: return False
+        return Decimal(s)
+    except:
+        return Decimal(0)
 
 def is_valid_date(value):
     try:
@@ -68,18 +73,30 @@ def get_mes_espanol(fecha):
 # 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def process_vendedores_file(uploaded_file):
+    # Leemos sin header para controlar índices manualmente
     df = pd.read_excel(uploaded_file, header=None)
     vendedores_map = {}
     current_vendedor = "SIN VENDEDOR"
 
     for _, row in df.iterrows():
-        texto = str(row[0]).strip()
-        if not texto or texto.lower() in ["venta", "nan"]: continue
+        # Tomamos la columna 0 como texto base
+        texto = str(safe_get(row, 0, "")).strip()
+        
+        # Saltamos filas vacías o basura
+        if not texto or texto.lower() in ["venta", "nan", "total", "iva"]: continue
 
+        # Detectamos si es Factura (tiene dígitos) o Vendedor (solo letras)
         if any(c.isdigit() for c in texto):
             factura = texto
-            pos = Decimal(str(row[1]).replace(',', '').replace('$', '')) if len(row) > 1 and is_number(row[1]) else Decimal(0)
-            neg = Decimal(str(row[5]).replace(',', '').replace('$', '')) if len(row) > 5 and is_number(row[5]) else Decimal(0)
+            
+            # LECTURA BLINDADA DE MONTOS
+            # Asumimos Col 1 = Venta Positiva, Col 5 = Devolución (Negativa)
+            # Usamos clean_currency_str para asegurar que "114.26" se lea bien
+            pos_val = safe_get(row, 1, 0)
+            neg_val = safe_get(row, 5, 0)
+            
+            pos = clean_currency_str(pos_val)
+            neg = clean_currency_str(neg_val)
 
             vendedores_map.setdefault(factura, []).append({
                 "VENDEDOR": current_vendedor,
@@ -87,7 +104,9 @@ def process_vendedores_file(uploaded_file):
                 "NEG": neg
             })
         else:
+            # Si no tiene números, asumimos que es el encabezado de un Vendedor
             current_vendedor = texto
+            
     return vendedores_map
 
 # ======================================================
@@ -117,21 +136,23 @@ def process_main_bpro(uploaded_file):
                 current_client, current_factura = None, None
                 continue
 
-            if is_number(row[1]) and is_valid_date(col_c):
+            # Detectar encabezado de factura
+            # Usamos clean_currency_str para el total global también
+            val_b = safe_get(row, 1, "")
+            if clean_currency_str(val_b) != 0 and is_valid_date(col_c):
                 current_factura = col_a
                 current_fecha = col_c
                 current_tipo = safe_get(row, 3)
                 current_almacen = safe_get(row, 4)
-                factura_total_global = Decimal(str(safe_get(row, 6, 0)).replace(',', ''))
+                factura_total_global = clean_currency_str(safe_get(row, 6, 0))
                 continue
 
             if col_a in ["ID Parte", "nan", "", "Diario de Ventas", "Página"]: continue
 
             if current_client and current_factura:
-                try:
-                    subtotal = Decimal(str(safe_get(row, 7, 0)).replace(',', ''))
-                    utilidad = Decimal(str(safe_get(row, 10, 0)).replace(',', ''))
-                except: subtotal, utilidad = Decimal(0), Decimal(0)
+                # Lectura de montos con limpieza
+                subtotal = clean_currency_str(safe_get(row, 7, 0))
+                utilidad = clean_currency_str(safe_get(row, 10, 0))
 
                 rows.append({
                     "SUCURSAL": "PENDIENTE",
@@ -148,7 +169,7 @@ def process_main_bpro(uploaded_file):
                     "COSTO": safe_get(row, 4, 0),
                     "PRECIO": safe_get(row, 5, 0),
                     "COSTO DE VENTA": safe_get(row, 6, 0),
-                    "VENTA SUBTOTAL": subtotal,
+                    "VENTA SUBTOTAL": subtotal, # Decimal limpio
                     "IVA": safe_get(row, 8, 0),
                     "VENTA TOTAL": safe_get(row, 9, 0),
                     "UTILIDAD": utilidad
@@ -160,20 +181,26 @@ def process_main_bpro(uploaded_file):
 # ======================================================
 def subset_sum_solver(items, objetivo):
     """
-    Busca una combinación exacta de items que sumen el objetivo.
-    items: lista de diccionarios [{'idx': 10, 'val': 100.50}, ...]
+    items: lista de dicts [{'idx': 10, 'val': Decimal('100.50')}]
+    objetivo: Decimal('114.26')
     """
-    tolerancia = Decimal("0.10") # Tolerancia para errores de punto flotante
+    # Tolerancia ampliada a 50 centavos por temas de redondeo IVA
+    tolerancia = Decimal("0.50")
     
-    # Ordenamos de mayor a menor para que encuentre sumas grandes rápido
-    # Esto optimiza la recursión
+    # 1. Normalizar inputs a 2 decimales para comparación estricta
+    objetivo_norm = objetivo.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+    
+    # Ordenamos descendente para optimizar
     items_sorted = sorted(items, key=lambda x: abs(x["val"]), reverse=True)
     
-    # Probamos combinaciones de tamaño 1 hasta 5 (raro que sean mas refacciones)
-    for r in range(1, min(len(items_sorted), 6) + 1):
+    # Probamos combinaciones de 1 hasta 6 elementos
+    # (Raramente un vendedor captura más de 6 lineas separadas para llegar a un total)
+    for r in range(1, min(len(items_sorted), 7) + 1):
         for combo in itertools.combinations(items_sorted, r):
             suma = sum(x["val"] for x in combo)
-            if abs(suma - objetivo) <= tolerancia:
+            suma_norm = suma.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+            
+            if abs(suma_norm - objetivo_norm) <= tolerancia:
                 return combo
     return None
 
@@ -184,21 +211,22 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
 
     for factura, g in df.groupby("FACTURA"):
-        # Importante: Mantenemos el orden original del Excel (indices)
         indices = g.index
         candidatos = mapa_vendedores.get(factura, [])
 
+        # Si no hay match en el archivo de vendedores, saltamos
         if not candidatos: continue
 
-        # Signo de la factura
+        # Determinamos si buscamos POS o NEG basado en el total de la factura
         total_global = g["GLOBAL_TOTAL_BPRO"].iloc[0]
         es_pos = total_global >= 0
 
-        # Preparamos metas (montos a buscar)
+        # Preparamos metas
         metas = []
         for c in candidatos:
             monto = c["POS"] if es_pos else c["NEG"]
-            if abs(monto) > 0: 
+            # IMPORTANTE: Solo agregamos si el monto es mayor a 0.01
+            if abs(monto) > Decimal("0.01"): 
                 metas.append({"VENDEDOR": c["VENDEDOR"], "META": monto})
         
         if not metas: continue
@@ -208,51 +236,50 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # CASO 2: Múltiples Vendedores -> LÓGICA INTELIGENTE
+        # CASO 2: Múltiples Vendedores
         
-        # Obtenemos la lista de items preservando su ORDEN ORIGINAL
-        items_todos = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
+        # Obtenemos items conservando orden original
+        # Forzamos conversión a Decimal limpio
+        items_todos = []
+        for idx in indices:
+            raw_val = g.at[idx, "VENTA SUBTOTAL"]
+            val_dec = Decimal(str(raw_val)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+            items_todos.append({"idx": idx, "val": val_dec})
+            
         usados = set()
         
-        # Ordenamos metas: Buscamos primero los montos pequeños (Alejandro)
-        # y dejamos al vendedor más grande (Hugo) para el final.
+        # Ordenamos metas de MENOR a MAYOR (Alejandro primero)
         metas.sort(key=lambda x: abs(x["META"]), reverse=False)
         
-        # Iteramos sobre todos MENOS el último (Hugo se queda con el resto)
+        # Iteramos sobre todos MENOS el último
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
             sol = None
             
-            # --- ESTRATEGIA A: ZONA CALIENTE (LOS ÚLTIMOS MOVIMIENTOS) ---
-            # Asumimos que el vendedor "extra" capturó al final.
-            # Tomamos los items disponibles.
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            # Cortamos la lista para ver solo el final (Reverse slice).
-            # Miramos los últimos 20 renglones.
-            zona_caliente = items_disponibles[-20:] 
-            
-            # Buscamos la combinación exacta en esa zona final
+            # --- ESTRATEGIA A: ZONA CALIENTE (Últimos 40 items) ---
+            # Ampliamos a 40 para no fallar
+            zona_caliente = items_disponibles[-40:] 
             sol = subset_sum_solver(zona_caliente, objetivo)
             
-            # --- ESTRATEGIA B: BÚSQUEDA GLOBAL (SI FALLA LA A) ---
+            # --- ESTRATEGIA B: BÚSQUEDA GLOBAL ---
             if not sol:
-                # Si no estaba al final, buscamos en TODO el documento pero filtrando por valor
-                # para no sobrecargar el sistema.
+                # Si falla, busca en todo con filtro de monto máximo
                 pool_global = [
                     x for x in items_disponibles
-                    if abs(x["val"]) <= (abs(objetivo) + Decimal("5.00")) # Margen amplio
+                    if abs(x["val"]) <= (abs(objetivo) + Decimal("2.00"))
                 ]
                 sol = subset_sum_solver(pool_global, objetivo)
 
-            # --- APLICAR RESULTADO ---
+            # Aplicar asignación
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             
-        # ASIGNACIÓN FINAL: HUGO (O EL MAYOR) SE QUEDA CON EL RESTO
+        # El resto para el Vendedor Mayor (Hugo)
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         
@@ -292,8 +319,8 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
             else:
                 df["SUCURSAL"] = sucursal
 
-                # 60% Cálculo Matemático (Lógica de Cola)
-                prog_bar.progress(60, text="🧮 Asignando Vendedores (Prioridad Últimos Movimientos)...")
+                # 60% Cálculo Matemático
+                prog_bar.progress(60, text="🧮 Asignando Vendedores (Lógica Blindada)...")
                 df = apply_vendor_logic_smart(df, mapa)
                 
                 # 80% Catálogo
@@ -323,7 +350,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df_final["año"] = df_final["FECHA_DT"].dt.year
                 df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
                 df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
-                # Ordenamos por fecha y cliente, pero MANTENEMOS el orden relativo interno si es posible
+                
                 df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
                 cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
