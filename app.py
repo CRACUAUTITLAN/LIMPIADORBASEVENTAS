@@ -11,7 +11,8 @@ from decimal import Decimal, getcontext
 # ======================================================
 # CONFIGURACIÓN INICIAL
 # ======================================================
-getcontext().prec = 12 # Precisión financiera
+# Configurar precisión para manejo de dinero exacto en Decimals
+getcontext().prec = 12
 
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
@@ -22,7 +23,7 @@ def reset_all():
     st.session_state['id_limpieza'] += 1
 
 # ======================================================
-# BARRA LATERAL
+# BARRA LATERAL (SIDEBAR)
 # ======================================================
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -31,8 +32,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Versión Ilimitada)")
-st.info("💡 Lógica de 'Último Hombre en Pie' activa: Elimina los 'Sin Vendedor' por diferencias de centavos asignando el remanente al último vendedor.")
+st.title("🏭 Generador de Base Maestra (Lógica Menor a Mayor)")
+st.info("💡 Estrategia 'Francotirador' Activa: Se buscan primero los montos pequeños (más fáciles de encontrar) y se asigna el restante automático al vendedor mayor.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -65,9 +66,13 @@ def get_mes_espanol(fecha):
     return meses.get(fecha.month, "DESCONOCIDO")
 
 # ======================================================
-# 2. PROCESAMIENTO VENDEDORES
+# 2. PROCESAMIENTO DE VENDEDORES (Escáner Dual)
 # ======================================================
 def process_vendedores_file(uploaded_file):
+    """
+    Lee el archivo de agentes.
+    Detecta montos en Columna B (Positivos/Ventas) y Columna F (Negativos/Devoluciones).
+    """
     df = pd.read_excel(uploaded_file, header=None)
     vendedores_map = {}
     current_vendedor = "SIN VENDEDOR"
@@ -78,9 +83,7 @@ def process_vendedores_file(uploaded_file):
 
         if any(c.isdigit() for c in texto):
             factura = texto
-            # Col B (Positivos)
             pos = Decimal(str(row[1]).replace(',', '').replace('$', '')) if len(row) > 1 and is_number(row[1]) else Decimal(0)
-            # Col F (Negativos)
             neg = Decimal(str(row[5]).replace(',', '').replace('$', '')) if len(row) > 5 and is_number(row[5]) else Decimal(0)
 
             vendedores_map.setdefault(factura, []).append({
@@ -93,7 +96,7 @@ def process_vendedores_file(uploaded_file):
     return vendedores_map
 
 # ======================================================
-# 3. PROCESAMIENTO BPRO
+# 3. PROCESAMIENTO BPRO (Lectura Raw)
 # ======================================================
 def process_main_bpro(uploaded_file):
     try: xls = pd.read_excel(uploaded_file, sheet_name=None, header=None)
@@ -158,31 +161,26 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# 4. SOLVER INTELIGENTE (OPTIMIZADO)
+# 4. SOLVER INTELIGENTE (Menor a Mayor)
 # ======================================================
 def subset_exact_optimized(items, objetivo):
     """
     Busca combinación exacta.
-    OPTIMIZACIÓN: Ordena los items de mayor a menor. 
-    Esto hace que 'itertools' encuentre la solución muchísimo más rápido
-    y permite procesar listas más grandes sin congelarse.
+    Intenta encontrar qué combinación de 'items' suma el 'objetivo'.
     """
-    # Ordenar items por valor absoluto descendente (Truco de velocidad)
-    items_sorted = sorted(items, key=lambda x: abs(x["val"]), reverse=True)
-    
-    # Aumentamos tolerancia a 10 centavos para absorber errores de redondeo de Excel
+    # Aumentamos tolerancia a 10 centavos para absorber errores de redondeo
     tolerancia = Decimal("0.10") 
     
     # Probamos combinaciones
-    # Nota: Sin límite duro, pero el ordenamiento ayuda a que no tarde años.
-    for r in range(1, len(items_sorted) + 1):
-        for combo in itertools.combinations(items_sorted, r):
+    # Al buscar montos pequeños, generalmente son pocas combinaciones (r=1, r=2, etc)
+    for r in range(1, len(items) + 1):
+        for combo in itertools.combinations(items, r):
             suma = sum(x["val"] for x in combo)
             if abs(suma - objetivo) <= tolerancia:
                 return combo
     return None
 
-def apply_vendor_logic_unlimited(df, mapa_vendedores):
+def apply_vendor_logic_smallest_first(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
 
     for factura, g in df.groupby("FACTURA"):
@@ -207,35 +205,40 @@ def apply_vendor_logic_unlimited(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # CASO 2: Múltiples vendedores -> Matemáticas + Lógica "Último Hombre"
+        # CASO 2: Múltiples vendedores -> ESTRATEGIA FRANCOTIRADOR
         items = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
         usados = set()
         
-        # Ordenamos metas: El que pide más dinero tiene prioridad de búsqueda
-        metas.sort(key=lambda x: abs(x["META"]), reverse=True)
+        # CAMBIO CRÍTICO: Ordenamos metas de MENOR A MAYOR (Ascendente)
+        # reverse=False hace que procesemos primero al de $114 y al final al de $89,000
+        metas.sort(key=lambda x: abs(x["META"]), reverse=False)
         
-        for i, meta in enumerate(metas):
-            # LOGICA DE ÚLTIMO HOMBRE EN PIE:
-            # Si es el último vendedor de la lista y quedan items sin asignar,
-            # DÁSELOS TODOS. No importa si cuadra el centavo o no.
-            if i == len(metas) - 1:
-                remaining_indices = [x["idx"] for x in items if x["idx"] not in usados]
-                if remaining_indices:
-                    df.loc[remaining_indices, "VENDEDOR"] = meta["VENDEDOR"]
-                continue
-
-            # Para los primeros vendedores, buscamos match exacto
+        # Iteramos sobre todos MENOS el último (el último se queda con el resto)
+        for i in range(len(metas) - 1):
+            meta_actual = metas[i]
+            
             disponibles = [x for x in items if x["idx"] not in usados]
-            sol = subset_exact_optimized(disponibles, meta["META"])
+            
+            # Buscamos la combinación exacta para el monto pequeño
+            sol = subset_exact_optimized(disponibles, meta_actual["META"])
 
             if sol:
                 for it in sol:
-                    df.at[it["idx"], "VENDEDOR"] = meta["VENDEDOR"]
+                    df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             else:
-                # Si no encontramos match exacto para este vendedor intermedio,
-                # pasamos al siguiente. El último heredará los problemas.
+                # Si no encontramos match para el pequeño, esto es una alerta.
+                # Podríamos dejarlo como "Sin Vendedor" o asignarlo al mayor.
+                # Por seguridad, lo dejamos pasar, y probablemente caiga en el "resto"
                 pass
+
+        # ASIGNACIÓN FINAL: EL RESTO ES DEL MAYOR
+        # El último vendedor de la lista (el más grande) se queda con todo lo que sobró.
+        vendedor_mayor = metas[-1]["VENDEDOR"]
+        remaining_indices = [x["idx"] for x in items if x["idx"] not in usados]
+        
+        if remaining_indices:
+            df.loc[remaining_indices, "VENDEDOR"] = vendedor_mayor
 
     return df
 
@@ -271,9 +274,9 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
             else:
                 df["SUCURSAL"] = sucursal
 
-                # 60% Cálculo Matemático (El paso pesado)
-                prog_bar.progress(60, text="🧮 Realizando cruce matemático ILIMITADO...")
-                df = apply_vendor_logic_unlimited(df, mapa)
+                # 60% Cálculo Matemático (Estrategia Francotirador)
+                prog_bar.progress(60, text="🧮 Asignando: Menores primero, Resto al Mayor...")
+                df = apply_vendor_logic_smallest_first(df, mapa)
                 
                 # 80% Catálogo
                 prog_bar.progress(80, text="📚 Cruzando Catálogo...")
@@ -320,13 +323,11 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 # Mostramos dataframe
                 st.dataframe(df_final.head(10))
                 
-                # BARRA 2: PREPARANDO DESCARGA (Lo que pediste)
-                # Esta barra aparece justo antes de que el botón esté listo
+                # BARRA 2: PREPARANDO DESCARGA
                 download_bar = st.progress(0, text="📁 Preparando archivo Excel para descarga...")
                 
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    # Simulamos carga de escritura (Excel tarda un poco en escribir)
                     download_bar.progress(50, text="✍️ Escribiendo hojas de Excel...")
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
