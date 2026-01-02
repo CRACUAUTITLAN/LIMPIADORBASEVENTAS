@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import re
-import time  # <--- AGREGA ESTO
+import time
 from datetime import datetime
 import itertools
 from decimal import Decimal, getcontext
@@ -275,9 +275,6 @@ def apply_vendor_logic_safe(df, mapa_vendedores):
 # ======================================================
 # 5. EJECUCIÓN PRINCIPAL (MAIN)
 # ======================================================
-# ======================================================
-# INTERFAZ DE CARGA
-# ======================================================
 uid = st.session_state['id_limpieza']
 
 # Selectores de archivo
@@ -286,9 +283,6 @@ with col1: file_bpro = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], 
 with col2: file_vend = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
 with col3: file_cat = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xls", "xlsx"], key=f"c_{uid}")
 
-# ======================================================
-# EJECUCIÓN PRINCIPAL CON BARRA DE PROGRESO
-# ======================================================
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if not (file_bpro and file_vend and file_cat):
         st.warning("⚠️ Por favor, sube los 3 archivos para continuar.")
@@ -382,6 +376,5 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
             
         except Exception as e:
             st.error(f"Error Técnico Inesperado: {e}")
-            # Si tienes la barra activa y falla, es bueno limpiarla o mostrar error
             if 'my_bar' in locals():
                 my_bar.empty()
