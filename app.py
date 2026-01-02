@@ -274,86 +274,113 @@ def apply_vendor_logic_safe(df, mapa_vendedores):
 # ======================================================
 # 5. EJECUCIÓN PRINCIPAL (MAIN)
 # ======================================================
+# ======================================================
+# INTERFAZ DE CARGA
+# ======================================================
 uid = st.session_state['id_limpieza']
 
 # Selectores de archivo
-file_bpro = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"b_{uid}")
-file_vend = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
-file_cat = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xls", "xlsx"], key=f"c_{uid}")
+col1, col2, col3 = st.columns(3)
+with col1: file_bpro = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"b_{uid}")
+with col2: file_vend = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
+with col3: file_cat = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xls", "xlsx"], key=f"c_{uid}")
 
+# ======================================================
+# EJECUCIÓN PRINCIPAL CON BARRA DE PROGRESO
+# ======================================================
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if not (file_bpro and file_vend and file_cat):
         st.warning("⚠️ Por favor, sube los 3 archivos para continuar.")
     else:
-        with st.spinner("Procesando datos, cruzando matemáticas y limpiando..."):
+        # 1. INICIALIZAR BARRA DE PROGRESO
+        progress_text = "Iniciando el motor de procesamiento..."
+        my_bar = st.progress(0, text=progress_text)
+
+        try:
+            # --- ETAPA 1: LEER VENDEDORES (10%) ---
+            my_bar.progress(10, text="📖 Leyendo y analizando archivo de Vendedores...")
+            mapa = process_vendedores_file(file_vend)
             
-            try:
-                # 1. Mapas de Vendedores
-                mapa = process_vendedores_file(file_vend)
+            # --- ETAPA 2: LEER BPRO (30%) ---
+            my_bar.progress(30, text="🏭 Procesando archivo BPro y detectando facturas...")
+            df = process_main_bpro(file_bpro)
+            
+            if df.empty:
+                st.error("Error: El archivo BPro parece estar vacío o con formato irreconocible.")
+                my_bar.empty() # Borrar barra si falla
+            else:
+                df["SUCURSAL"] = sucursal
+
+                # --- ETAPA 3: CÁLCULO MATEMÁTICO (Esta es la pesada - 60%) ---
+                my_bar.progress(50, text="🧮 Realizando cruce matemático inteligente (Subset Sum)...")
                 
-                # 2. Leer BPro
-                df = process_main_bpro(file_bpro)
-                if df.empty:
-                    st.error("Error: El archivo BPro parece estar vacío o con formato irreconocible.")
-                else:
-                    df["SUCURSAL"] = sucursal
+                # Aquí ocurre la magia
+                df = apply_vendor_logic_safe(df, mapa)
+                
+                # --- ETAPA 4: CATÁLOGO Y LIMPIEZA (80%) ---
+                my_bar.progress(80, text="📚 Cruzando con Catálogo y aplicando reglas de negocio...")
+                
+                df_cat = pd.read_excel(file_cat)
+                df["NP"] = df["NP"].astype(str).str.strip()
+                df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
+                
+                df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], 
+                                  on='NP', how='left', suffixes=('_orig', '_new'))
+                
+                # Rellenos de Catálogo
+                mask_nocat = df_final['CATEGORIA'].isna()
+                df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
+                df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
+                df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
+                
+                # --- ETAPA 5: FORMATO FINAL (95%) ---
+                my_bar.progress(95, text="✨ Aplicando formatos finales y generando Excel...")
+                
+                # Correcciones Numéricas
+                for col in ["CANTIDAD", "COSTO DE VENTA", "VENTA SUBTOTAL", "UTILIDAD"]:
+                    df_final[col] = pd.to_numeric(df_final[col], errors="coerce").fillna(0)
 
-                    # 3. APLICAR LÓGICA DE ASIGNACIÓN (EL CORAZÓN DEL PROGRAMA)
-                    df = apply_vendor_logic_safe(df, mapa)
+                # Corrección Signos (Devoluciones)
+                mask_err = (df_final["CANTIDAD"] < 0) & (df_final["COSTO DE VENTA"] > 0)
+                df_final.loc[mask_err, "COSTO DE VENTA"] *= -1
+                df_final.loc[mask_err, "UTILIDAD"] = df_final.loc[mask_err, "VENTA SUBTOTAL"] - df_final.loc[mask_err, "COSTO DE VENTA"]
 
-                    # 4. Cruce con Catálogo
-                    df_cat = pd.read_excel(file_cat)
-                    df["NP"] = df["NP"].astype(str).str.strip()
-                    df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
-                    
-                    df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], 
-                                      on='NP', how='left', suffixes=('_orig', '_new'))
-                    
-                    # Rellenos de Catálogo
-                    mask_nocat = df_final['CATEGORIA'].isna()
-                    df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
-                    df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
-                    df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
-                    
-                    # 5. Correcciones Numéricas Finales (Devoluciones)
-                    for col in ["CANTIDAD", "COSTO DE VENTA", "VENTA SUBTOTAL", "UTILIDAD"]:
-                        df_final[col] = pd.to_numeric(df_final[col], errors="coerce").fillna(0)
+                # Fechas
+                df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
+                if anio_texto.isdigit():
+                    df_final = df_final[df_final["FECHA_DT"].dt.year == int(anio_texto)]
 
-                    # Si Cantidad es Negativa y Costo Positivo -> Invertir Costo
-                    mask_err = (df_final["CANTIDAD"] < 0) & (df_final["COSTO DE VENTA"] > 0)
-                    df_final.loc[mask_err, "COSTO DE VENTA"] *= -1
-                    # Recalcular utilidad
-                    df_final.loc[mask_err, "UTILIDAD"] = df_final.loc[mask_err, "VENTA SUBTOTAL"] - df_final.loc[mask_err, "COSTO DE VENTA"]
+                df_final["año"] = df_final["FECHA_DT"].dt.year
+                df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
+                df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
+                
+                # Ordenar
+                df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
-                    # 6. Fechas y Formato
-                    df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
-                    if anio_texto.isdigit():
-                        df_final = df_final[df_final["FECHA_DT"].dt.year == int(anio_texto)]
+                # Selección Final
+                cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
+                for c in cols_fin:
+                    if c not in df_final.columns: df_final[c] = 0
+                df_final = df_final[cols_fin]
 
-                    df_final["año"] = df_final["FECHA_DT"].dt.year
-                    df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
-                    df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
-                    
-                    # Ordenar
-                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
+                # --- COMPLETADO (100%) ---
+                my_bar.progress(100, text="✅ ¡Proceso Completado!")
+                time.sleep(1) # Pequeña pausa visual
+                my_bar.empty() # Quitamos la barra para que se vea limpio
 
-                    # Selección Final de Columnas
-                    cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
-                    for c in cols_fin:
-                        if c not in df_final.columns: df_final[c] = 0
-                    df_final = df_final[cols_fin]
-
-                    # 7. Descarga
-                    st.success(f"¡Base generada exitosamente! ({len(df_final)} registros procesados)")
-                    st.dataframe(df_final.head(10))
-                    
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        df_final.to_excel(writer, index=False, sheet_name='Datos')
-                    
-                    st.download_button(f"📥 Descargar {sucursal}", data=buffer.getvalue(), 
-                                     file_name=f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx",
-                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.success(f"¡Base generada exitosamente! ({len(df_final)} registros procesados)")
+                st.dataframe(df_final.head(10))
+                
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_final.to_excel(writer, index=False, sheet_name='Datos')
+                
+                st.download_button(f"📥 Descargar {sucursal}", data=buffer.getvalue(), 
+                                 file_name=f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx",
+                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
-            except Exception as e:
-                st.error(f"Error Técnico Inesperado: {e}")
+        except Exception as e:
+            st.error(f"Error Técnico Inesperado: {e}")
+            # Si tienes la barra activa y falla, es bueno limpiarla o mostrar error
+            if 'my_bar' in locals():
+                my_bar.empty()
