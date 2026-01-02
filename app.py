@@ -11,7 +11,6 @@ from decimal import Decimal, getcontext
 # ======================================================
 # CONFIGURACIÓN INICIAL
 # ======================================================
-# Configurar precisión para manejo de dinero exacto en Decimals
 getcontext().prec = 12
 
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
@@ -23,7 +22,7 @@ def reset_all():
     st.session_state['id_limpieza'] += 1
 
 # ======================================================
-# BARRA LATERAL (SIDEBAR)
+# BARRA LATERAL
 # ======================================================
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -32,8 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Lógica Menor a Mayor)")
-st.info("💡 Estrategia 'Francotirador' Activa: Se buscan primero los montos pequeños (más fáciles de encontrar) y se asigna el restante automático al vendedor mayor.")
+st.title("🏭 Generador de Base Maestra (Corrección Alejandro)")
+st.info("💡 Filtro Inteligente Activo: Para montos pequeños, el sistema ignora automáticamente las refacciones grandes para encontrar la coincidencia exacta.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -66,13 +65,9 @@ def get_mes_espanol(fecha):
     return meses.get(fecha.month, "DESCONOCIDO")
 
 # ======================================================
-# 2. PROCESAMIENTO DE VENDEDORES (Escáner Dual)
+# 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def process_vendedores_file(uploaded_file):
-    """
-    Lee el archivo de agentes.
-    Detecta montos en Columna B (Positivos/Ventas) y Columna F (Negativos/Devoluciones).
-    """
     df = pd.read_excel(uploaded_file, header=None)
     vendedores_map = {}
     current_vendedor = "SIN VENDEDOR"
@@ -83,7 +78,9 @@ def process_vendedores_file(uploaded_file):
 
         if any(c.isdigit() for c in texto):
             factura = texto
+            # Col B (Positivos)
             pos = Decimal(str(row[1]).replace(',', '').replace('$', '')) if len(row) > 1 and is_number(row[1]) else Decimal(0)
+            # Col F (Negativos)
             neg = Decimal(str(row[5]).replace(',', '').replace('$', '')) if len(row) > 5 and is_number(row[5]) else Decimal(0)
 
             vendedores_map.setdefault(factura, []).append({
@@ -96,7 +93,7 @@ def process_vendedores_file(uploaded_file):
     return vendedores_map
 
 # ======================================================
-# 3. PROCESAMIENTO BPRO (Lectura Raw)
+# 3. PROCESAMIENTO BPRO
 # ======================================================
 def process_main_bpro(uploaded_file):
     try: xls = pd.read_excel(uploaded_file, sheet_name=None, header=None)
@@ -161,26 +158,35 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# 4. SOLVER INTELIGENTE (Menor a Mayor)
+# 4. SOLVER INTELIGENTE (FILTRO + RETRY)
 # ======================================================
-def subset_exact_optimized(items, objetivo):
+def subset_exact_smart(items, objetivo):
     """
-    Busca combinación exacta.
-    Intenta encontrar qué combinación de 'items' suma el 'objetivo'.
+    Busca combinación exacta con estrategia de FILTRO.
+    Solo considera items que sean menores o iguales al objetivo (+ margen).
+    Esto evita que items grandes (de Hugo) estorben en la búsqueda de items pequeños (Alejandro).
     """
-    # Aumentamos tolerancia a 10 centavos para absorber errores de redondeo
-    tolerancia = Decimal("0.10") 
+    # 1. PRE-FILTRO CRÍTICO:
+    # Si buscamos 114 pesos, ignoramos cualquier refacción mayor a 116 pesos.
+    # Esto reduce la lista de 50 items a solo los 3 o 4 pequeños posibles.
+    margen_filtro = Decimal("2.00")
+    items_candidatos = [x for x in items if x["val"] <= (objetivo + margen_filtro)]
     
-    # Probamos combinaciones
-    # Al buscar montos pequeños, generalmente son pocas combinaciones (r=1, r=2, etc)
-    for r in range(1, len(items) + 1):
-        for combo in itertools.combinations(items, r):
-            suma = sum(x["val"] for x in combo)
-            if abs(suma - objetivo) <= tolerancia:
-                return combo
+    # Ordenar mayor a menor (dentro de los candidatos) para acelerar
+    items_sorted = sorted(items_candidatos, key=lambda x: abs(x["val"]), reverse=True)
+    
+    # Tolerancias progresivas (Intento 1: estricto, Intento 2: flexible)
+    tolerancias = [Decimal("0.10"), Decimal("1.00")] 
+    
+    for tol in tolerancias:
+        for r in range(1, len(items_sorted) + 1):
+            for combo in itertools.combinations(items_sorted, r):
+                suma = sum(x["val"] for x in combo)
+                if abs(suma - objetivo) <= tol:
+                    return combo
     return None
 
-def apply_vendor_logic_smallest_first(df, mapa_vendedores):
+def apply_vendor_logic_smart(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
 
     for factura, g in df.groupby("FACTURA"):
@@ -205,35 +211,33 @@ def apply_vendor_logic_smallest_first(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # CASO 2: Múltiples vendedores -> ESTRATEGIA FRANCOTIRADOR
+        # CASO 2: Múltiples vendedores -> ESTRATEGIA FILTRADA
         items = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
         usados = set()
         
-        # CAMBIO CRÍTICO: Ordenamos metas de MENOR A MAYOR (Ascendente)
-        # reverse=False hace que procesemos primero al de $114 y al final al de $89,000
+        # Ordenamos: MENOR A MAYOR (Primero Alejandro con sus 114 pesos)
         metas.sort(key=lambda x: abs(x["META"]), reverse=False)
         
-        # Iteramos sobre todos MENOS el último (el último se queda con el resto)
+        # Iteramos sobre todos MENOS el último
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             
             disponibles = [x for x in items if x["idx"] not in usados]
             
-            # Buscamos la combinación exacta para el monto pequeño
-            sol = subset_exact_optimized(disponibles, meta_actual["META"])
+            # Usamos el Solver Inteligente que filtra items gigantes
+            sol = subset_exact_smart(disponibles, meta_actual["META"])
 
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             else:
-                # Si no encontramos match para el pequeño, esto es una alerta.
-                # Podríamos dejarlo como "Sin Vendedor" o asignarlo al mayor.
-                # Por seguridad, lo dejamos pasar, y probablemente caiga en el "resto"
+                # Si falló, es raro con el nuevo filtro, pero seguimos.
                 pass
 
         # ASIGNACIÓN FINAL: EL RESTO ES DEL MAYOR
-        # El último vendedor de la lista (el más grande) se queda con todo lo que sobró.
+        # Todo lo que no se pudo asignar (por diferencias mínimas o porque eran los items grandes)
+        # se le da al último vendedor (el más grande, Hugo).
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items if x["idx"] not in usados]
         
@@ -250,7 +254,7 @@ uid = st.session_state['id_limpieza']
 col1, col2, col3 = st.columns(3)
 with col1: file_bpro = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"b_{uid}")
 with col2: file_vend = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
-with col3: file_cat = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xls", "xlsx"], key=f"c_{uid}")
+with col3: file_cat = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
 
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if not (file_bpro and file_vend and file_cat):
@@ -274,9 +278,9 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
             else:
                 df["SUCURSAL"] = sucursal
 
-                # 60% Cálculo Matemático (Estrategia Francotirador)
-                prog_bar.progress(60, text="🧮 Asignando: Menores primero, Resto al Mayor...")
-                df = apply_vendor_logic_smallest_first(df, mapa)
+                # 60% Cálculo Matemático
+                prog_bar.progress(60, text="🧮 Asignando Vendedores (Filtro Inteligente)...")
+                df = apply_vendor_logic_smart(df, mapa)
                 
                 # 80% Catálogo
                 prog_bar.progress(80, text="📚 Cruzando Catálogo...")
