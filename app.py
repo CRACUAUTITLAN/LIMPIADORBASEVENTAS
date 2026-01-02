@@ -32,7 +32,7 @@ with st.sidebar:
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 st.title("🏭 Generador de Base Maestra (Corrección Final)")
-st.info("💡 Lógica Francotirador Activa: El sistema filtra primero los montos pequeños para encontrar coincidencias exactas incluso en facturas gigantes.")
+st.info("💡 Lógica Híbrida Activa: 1. Busca coincidencias al final de la factura (Orden Cronológico). 2. Si falla, usa lógica matemática (Francotirador).")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -162,11 +162,9 @@ def subset_sum_solver(items, objetivo):
     """
     Recibe una lista de items filtrados y busca la combinación exacta.
     """
-    # Tolerancia para errores de punto flotante/redondeo
     tolerancia = Decimal("0.10")
     
     # Probamos combinaciones de tamaño 1 hasta N
-    # Nota: Como la lista 'items' ya viene filtrada y pequeña, esto es rápido.
     for r in range(1, len(items) + 1):
         for combo in itertools.combinations(items, r):
             suma = sum(x["val"] for x in combo)
@@ -201,7 +199,9 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # CASO 2: Múltiples Vendedores -> LÓGICA FRANCOTIRADOR
+        # CASO 2: Múltiples Vendedores -> LÓGICA MIXTA (COLA + FRANCOTIRADOR)
+        
+        # Obtenemos TODOS los items en su ORDEN ORIGINAL
         items_todos = [{"idx": idx, "val": g.at[idx, "VENTA SUBTOTAL"]} for idx in indices]
         usados = set()
         
@@ -213,31 +213,43 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
             
-            # === EL FILTRO DE ORO ===
-            # Solo consideramos items que sean menores o iguales al objetivo (+ margen)
-            # Si Alejandro busca $114, NO miramos refacciones de $500.
-            # Esto reduce la lista de 50 items a 3 o 4 items relevantes.
-            candidatos_relevantes = [
-                x for x in items_todos 
-                if x["idx"] not in usados 
-                and abs(x["val"]) <= (abs(objetivo) + Decimal("1.00"))
-            ]
+            sol = None
             
-            # Ordenamos los candidatos de Mayor a Menor para que el solver encuentre rápido (100 + 14 es mejor que 1+1+1...)
-            candidatos_relevantes.sort(key=lambda x: abs(x["val"]), reverse=True)
+            # --- ESTRATEGIA A: LA LÓGICA DE "LOS ÚLTIMOS" (Cronológico) ---
+            # Verificamos si los items libres DEL FINAL suman la meta.
+            items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            # Ejecutamos el solver solo sobre esta lista pequeña
-            sol = subset_sum_solver(candidatos_relevantes, objetivo)
+            # Probamos sumar el último, luego los últimos 2, hasta los últimos 8.
+            for k in range(1, min(len(items_disponibles), 8) + 1):
+                cola = items_disponibles[-k:] 
+                suma_cola = sum(x["val"] for x in cola)
+                
+                if abs(suma_cola - objetivo) <= Decimal("0.10"):
+                    sol = cola
+                    break 
+            
+            # --- ESTRATEGIA B: FRANCOTIRADOR MATEMÁTICO (Respaldo) ---
+            if not sol:
+                # Solo si no funcionó mirar al final, buscamos por monto
+                candidatos_relevantes = [
+                    x for x in items_todos 
+                    if x["idx"] not in usados 
+                    and abs(x["val"]) <= (abs(objetivo) + Decimal("1.00"))
+                ]
+                # Ordenamos por valor para el solver
+                candidatos_relevantes.sort(key=lambda x: abs(x["val"]), reverse=True)
+                
+                sol = subset_sum_solver(candidatos_relevantes, objetivo)
 
+            # ASIGNACIÓN
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             
-            # Si no encuentra match (muy raro con este filtro), no asigna nada y pasará al mayor.
+            # Si no encuentra match, pasará al mayor.
 
         # ASIGNACIÓN FINAL: EL RESTO ES DEL MAYOR
-        # El último vendedor (Hugo) se queda con todo lo que sobró.
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         
@@ -278,7 +290,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df["SUCURSAL"] = sucursal
 
                 # 60% Cálculo Matemático
-                prog_bar.progress(60, text="🧮 Asignando Vendedores (Filtro Francotirador)...")
+                prog_bar.progress(60, text="🧮 Asignando Vendedores (Lógica Híbrida)...")
                 df = apply_vendor_logic_smart(df, mapa)
                 
                 # 80% Catálogo
