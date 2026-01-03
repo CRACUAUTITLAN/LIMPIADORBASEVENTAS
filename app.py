@@ -32,7 +32,7 @@ with st.sidebar:
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 st.title("🏭 Generador de Base Maestra (Versión Final)")
-st.info("💡 Solución Activa: Rastreador inteligente de montos + Lógica de asignación exacta (Menor a Mayor).")
+st.info("💡 Lógica Activa: Asignación exacta de montos y corrección automática de vendedores compartidos.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -42,14 +42,11 @@ def clean_client_name(text):
     return re.sub(r'[^\w\s]', '', text).strip()
 
 def clean_currency_str(val):
-    """Limpia strings de moneda agresivamente."""
     if pd.isna(val) or val == "": return Decimal(0)
     s = str(val).replace('$', '').replace(',', '').strip()
-    s = re.sub(r'[^\d.-]', '', s) # Elimina letras
-    try:
-        return Decimal(s)
-    except:
-        return Decimal(0)
+    s = re.sub(r'[^\d.-]', '', s) 
+    try: return Decimal(s)
+    except: return Decimal(0)
 
 def is_valid_date(value):
     try:
@@ -69,14 +66,12 @@ def get_mes_espanol(fecha):
     return meses.get(fecha.month, "DESCONOCIDO")
 
 # ======================================================
-# 2. PROCESAMIENTO VENDEDORES (RASTREADOR INTELIGENTE)
+# 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def find_first_amount_in_row(row):
-    """Busca el primer número válido en la fila (ignorando la col 0 que es la factura)"""
-    # Escaneamos de la columna 1 a la 15 por si acaso
+    """Busca el monto en cualquier columna de la fila"""
     for i in range(1, min(len(row), 15)):
         val = clean_currency_str(safe_get(row, i, 0))
-        # Si es un número válido y mayor a 1 centavo
         if abs(val) > Decimal("0.01"):
             return val
     return Decimal(0)
@@ -88,17 +83,12 @@ def process_vendedores_file(uploaded_file):
     
     for _, row in df.iterrows():
         texto = str(safe_get(row, 0, "")).strip()
-        
-        # Saltamos basura
         if not texto or texto.lower() in ["venta", "nan", "total", "iva"]: continue
 
         if any(c.isdigit() for c in texto):
             factura = texto
-            
-            # Buscamos el monto en cualquier columna
             monto = find_first_amount_in_row(row)
             
-            # Clasificamos según el signo encontrado
             if monto >= 0:
                 pos = monto
                 neg = Decimal(0)
@@ -138,13 +128,11 @@ def process_main_bpro(uploaded_file):
                 current_client = clean_client_name(col_a)
                 current_factura = None
                 continue
-
             if col_a.startswith("Totales"):
                 current_client, current_factura = None, None
                 continue
 
             val_b = safe_get(row, 1, "")
-            # Detectamos factura si hay fecha válida
             if is_valid_date(col_c) and (col_a.startswith("DA") or is_number(val_b)):
                 current_factura = col_a
                 current_fecha = col_c
@@ -185,7 +173,7 @@ def process_main_bpro(uploaded_file):
 # 4. SOLVER MATEMÁTICO
 # ======================================================
 def subset_sum_solver(items, objetivo):
-    tolerancia = Decimal("0.50") # Tolerancia de 50 centavos
+    tolerancia = Decimal("0.50") 
     objetivo_norm = objetivo.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
     items_sorted = sorted(items, key=lambda x: abs(x["val"]), reverse=True)
     
@@ -202,7 +190,6 @@ def subset_sum_solver(items, objetivo):
 # ======================================================
 def apply_vendor_logic_smart(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
-
     for factura, g in df.groupby("FACTURA"):
         indices = g.index
         candidatos = mapa_vendedores.get(factura, [])
@@ -223,7 +210,6 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # Múltiples Vendedores
         items_todos = []
         for idx in indices:
             raw_val = g.at[idx, "VENTA SUBTOTAL"]
@@ -231,7 +217,6 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             items_todos.append({"idx": idx, "val": val_dec})
             
         usados = set()
-        # Ordenamos de MENOR A MAYOR para resolver primero los casos tipo Alejandro
         metas.sort(key=lambda x: abs(x["META"]), reverse=False) 
         
         for i in range(len(metas) - 1):
@@ -241,12 +226,10 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            # ESTRATEGIA 1: ZONA CALIENTE (Los últimos items suelen ser de quien llegó tarde)
             zona_caliente = items_disponibles[-30:] 
             sol = subset_sum_solver(zona_caliente, objetivo)
             
             if not sol:
-                # ESTRATEGIA 2: BÚSQUEDA GLOBAL CON FILTRO
                 pool_global = [x for x in items_disponibles if abs(x["val"]) <= (abs(objetivo) + Decimal("2.00"))]
                 sol = subset_sum_solver(pool_global, objetivo)
 
@@ -255,7 +238,6 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             
-        # El resto se lo asignamos al vendedor con la meta más grande (el último de la lista)
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         if remaining_indices:
@@ -268,7 +250,7 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
 # ======================================================
 uid = st.session_state['id_limpieza']
 
-def is_number_check(s):
+def is_number(s):
     try: float(str(s).replace(',', '')); return True
     except: return False
 
@@ -338,16 +320,18 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 time.sleep(0.5)
                 prog_bar.empty()
                 
+                # === RESULTADOS (INTERFAZ LIMPIA) ===
+                st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
+                st.dataframe(df_final.head(10)) # Solo muestra la tabla final
+                
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
-                st.success("Archivo Generado Exitosamente")
-                
-                # Nombre corregido aquí: {SUCURSAL}_Ventas_{AÑO}_MASTER.xlsx
+                # === NOMBRE DEL ARCHIVO CORREGIDO ===
                 nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                 
-                st.download_button(f"📥 Descargar {sucursal}", data=buffer.getvalue(), 
+                st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
                                  file_name=nombre_archivo,
                                  mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
