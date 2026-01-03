@@ -21,7 +21,7 @@ def reset_all():
     st.session_state['id_limpieza'] += 1
 
 # ======================================================
-# BARRA LATERAL (IDÉNTICA A TU VERSIÓN ANTERIOR)
+# BARRA LATERAL
 # ======================================================
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -30,8 +30,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-# MARCADOR VISUAL PARA QUE SEPAS QUE ES EL CÓDIGO NUEVO
-st.title("🏭 CRA REFACCIONES: Generador de Base VENTAS ")
+# TÍTULO VERSIÓN FINAL CON BARRA DE PROGRESO
+st.title("🏭 Generador de Base Maestra (Versión Final)")
 st.markdown("""
 **Instrucciones:**
 1. Sube los archivos.
@@ -40,7 +40,7 @@ st.markdown("""
 """)
 
 # ======================================================
-# 1. FUNCIONES AUXILIARES (LÓGICA NUEVA ROBUSTA)
+# 1. FUNCIONES AUXILIARES
 # ======================================================
 def clean_client_name(text):
     if not isinstance(text, str): return str(text)
@@ -78,7 +78,7 @@ def is_number(s):
     except: return False
 
 # ======================================================
-# 2. PROCESAMIENTO VENDEDORES (SOLO LECTURA INTERNA)
+# 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def find_first_amount_in_row(row):
     for i in range(1, min(len(row), 15)):
@@ -88,7 +88,6 @@ def find_first_amount_in_row(row):
     return Decimal(0)
 
 def process_vendedores_file(uploaded_file):
-    # Esta función procesa internamente pero NO muestra tabla en pantalla
     df = pd.read_excel(uploaded_file, header=None)
     vendedores_map = {}
     current_vendedor = "SIN VENDEDOR"
@@ -182,7 +181,7 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# 4. SOLVER MATEMÁTICO (LÓGICA NUEVA)
+# 4. SOLVER MATEMÁTICO
 # ======================================================
 def subset_sum_solver(items, objetivo):
     tolerancia = Decimal("0.50") 
@@ -198,7 +197,6 @@ def subset_sum_solver(items, objetivo):
     return None
 
 def apply_vendor_logic_smart(df, mapa_vendedores):
-    # Lógica de asignación exacta usando Decimal y Solver
     df["VENDEDOR"] = "Sin Vendedor"
     for factura, g in df.groupby("FACTURA"):
         indices = g.index
@@ -235,11 +233,9 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             sol = None
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            # Estrategia Caliente
             zona_caliente = items_disponibles[-30:] 
             sol = subset_sum_solver(zona_caliente, objetivo)
             
-            # Estrategia Global
             if not sol:
                 pool_global = [x for x in items_disponibles if abs(x["val"]) <= (abs(objetivo) + Decimal("2.00"))]
                 sol = subset_sum_solver(pool_global, objetivo)
@@ -257,7 +253,7 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
     return df
 
 # ======================================================
-# 5. ZONA DE CARGA (INTERFAZ SIMPLE)
+# 5. EJECUCIÓN CON BARRA DE PROGRESO
 # ======================================================
 uid = st.session_state['id_limpieza']
 
@@ -268,82 +264,87 @@ with col1: file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"],
 with col2: file_vendedores = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
 with col3: file_catalogo = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
 
-# ======================================================
-# 6. EJECUCIÓN
-# ======================================================
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if not (file_sucio and file_vendedores and file_catalogo):
         st.warning("⚠️ Sube los 3 archivos.")
     else:
-        # Usamos st.spinner como en tu versión vieja favorita
-        with st.spinner('Procesando datos con Lógica Matemática...'):
-            try:
-                # 1. Procesar Vendedores (Silencioso, sin tabla)
-                mapa = process_vendedores_file(file_vendedores)
+        # AQUI ESTA LA BARRA DE PROGRESO QUE TE GUSTA
+        prog_bar = st.progress(0, text="Iniciando motor de cálculo...")
+        
+        try:
+            # 1. Vendedores
+            prog_bar.progress(10, text="📖 Leyendo Vendedores...")
+            mapa = process_vendedores_file(file_vendedores)
+            
+            # 2. BPro
+            prog_bar.progress(30, text="🏭 Procesando BPro...")
+            df = process_main_bpro(file_sucio)
+            
+            if df.empty:
+                st.error("Error: BPro vacío.")
+                prog_bar.empty()
+            else:
+                df["SUCURSAL"] = sucursal
                 
-                # 2. Procesar BPro
-                df = process_main_bpro(file_sucio)
+                # 3. Asignación (Solver)
+                prog_bar.progress(60, text="🧮 Ejecutando Solver Matemático...")
+                df = apply_vendor_logic_smart(df, mapa)
                 
-                if df.empty:
-                    st.error("Error: BPro vacío.")
-                else:
-                    df["SUCURSAL"] = sucursal
-                    
-                    # 3. Asignación (Solver)
-                    df = apply_vendor_logic_smart(df, mapa)
-                    
-                    # 4. Catálogo y Limpieza
-                    df_cat = pd.read_excel(file_catalogo)
-                    df["NP"] = df["NP"].astype(str).str.strip()
-                    df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
-                    df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
-                    
-                    mask_nocat = df_final['CATEGORIA'].isna()
-                    df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
-                    df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
-                    df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
-                    
-                    for col in ["CANTIDAD", "COSTO DE VENTA", "VENTA SUBTOTAL", "UTILIDAD"]:
-                        df_final[col] = pd.to_numeric(df_final[col], errors="coerce").fillna(0)
+                # 4. Catálogo
+                prog_bar.progress(80, text="📚 Cruzando Catálogo...")
+                df_cat = pd.read_excel(file_catalogo)
+                df["NP"] = df["NP"].astype(str).str.strip()
+                df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
+                df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
+                
+                mask_nocat = df_final['CATEGORIA'].isna()
+                df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
+                df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
+                df_final['LINEA'] = np.where(df_final['LINEA_new'].notna(), df_final['LINEA_new'], df_final['LINEA_orig'])
+                
+                for col in ["CANTIDAD", "COSTO DE VENTA", "VENTA SUBTOTAL", "UTILIDAD"]:
+                    df_final[col] = pd.to_numeric(df_final[col], errors="coerce").fillna(0)
 
-                    mask_err = (df_final["CANTIDAD"] < 0) & (df_final["COSTO DE VENTA"] > 0)
-                    df_final.loc[mask_err, "COSTO DE VENTA"] *= -1
-                    df_final.loc[mask_err, "UTILIDAD"] = df_final.loc[mask_err, "VENTA SUBTOTAL"] - df_final.loc[mask_err, "COSTO DE VENTA"]
+                mask_err = (df_final["CANTIDAD"] < 0) & (df_final["COSTO DE VENTA"] > 0)
+                df_final.loc[mask_err, "COSTO DE VENTA"] *= -1
+                df_final.loc[mask_err, "UTILIDAD"] = df_final.loc[mask_err, "VENTA SUBTOTAL"] - df_final.loc[mask_err, "COSTO DE VENTA"]
 
-                    df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
-                    
-                    if anio_texto.isdigit():
-                        df_final = df_final[df_final["FECHA_DT"].dt.year == int(anio_texto)]
-                    
-                    df_final["año"] = df_final["FECHA_DT"].dt.year
-                    df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
-                    df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
-                    
-                    df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
-                    
-                    cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
-                    for c in cols_fin:
-                        if c not in df_final.columns: df_final[c] = 0
-                    df_final = df_final[cols_fin]
+                df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
+                
+                if anio_texto.isdigit():
+                    df_final = df_final[df_final["FECHA_DT"].dt.year == int(anio_texto)]
+                
+                df_final["año"] = df_final["FECHA_DT"].dt.year
+                df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
+                df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
+                
+                df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
+                
+                cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
+                for c in cols_fin:
+                    if c not in df_final.columns: df_final[c] = 0
+                df_final = df_final[cols_fin]
 
-                    # === RESULTADO EN PANTALLA (ESTILO VIEJO) ===
-                    st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
-                    # Mostramos SOLO la tabla final como pediste
-                    st.dataframe(df_final.head(10)) 
-                    
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        df_final.to_excel(writer, index=False, sheet_name='Datos')
-                    
-                    # === NOMBRE DE ARCHIVO CORRECTO (ESTILO VIEJO) ===
-                    # Se concatena Sucursal + "Ventas" + Año + "MASTER"
-                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
-                    
-                    st.download_button(
-                        label=f"📥 Descargar {nombre_archivo}", 
-                        data=buffer.getvalue(), 
-                        file_name=nombre_archivo,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            except Exception as e:
-                st.error(f"Error Técnico: {e}")
+                # FIN DEL PROCESO
+                prog_bar.progress(100, text="✅ Proceso Completado.")
+                time.sleep(0.5)
+                prog_bar.empty()
+                
+                # RESULTADOS
+                st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
+                st.dataframe(df_final.head(10)) 
+                
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_final.to_excel(writer, index=False, sheet_name='Datos')
+                
+                nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
+                
+                st.download_button(
+                    label=f"📥 Descargar {nombre_archivo}", 
+                    data=buffer.getvalue(), 
+                    file_name=nombre_archivo,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        except Exception as e:
+            st.error(f"Error Técnico: {e}")
