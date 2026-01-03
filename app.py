@@ -31,8 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Versión Final)")
-st.info("💡 Lógica Activa: Asignación exacta de montos y corrección automática de vendedores compartidos.")
+st.title("🏭 Generador de Base Maestra")
+st.info("💡 Versión Final: Lógica de asignación exacta activa + Interfaz limpia.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -320,15 +320,15 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 time.sleep(0.5)
                 prog_bar.empty()
                 
-                # === RESULTADOS (INTERFAZ LIMPIA) ===
+                # === RESULTADOS ===
                 st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
-                st.dataframe(df_final.head(10)) # Solo muestra la tabla final
+                st.dataframe(df_final.head(10)) 
                 
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
-                # === NOMBRE DEL ARCHIVO CORREGIDO ===
+                # NOMBRE DE ARCHIVO RESTAURADO: {SUCURSAL}_Ventas_{AÑO}_MASTER.xlsx
                 nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                 
                 st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
