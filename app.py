@@ -31,7 +31,7 @@ with st.sidebar:
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 # MARCADOR VISUAL PARA QUE SEPAS QUE ES EL CÓDIGO NUEVO
-st.title("🏭 Generador de Base Maestra (Versión Final :))")
+st.title("🏭 CRA REFACCIONES: Generador de Base VENTAS ")
 st.markdown("""
 **Instrucciones:**
 1. Sube los archivos.
