@@ -32,7 +32,7 @@ with st.sidebar:
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
 st.title("🏭 Generador de Base Maestra")
-st.info("💡 Versión Final: Lógica de asignación exacta activa + Interfaz limpia.")
+st.info("💡 Lógica de Velocidad Activa: Filtro agresivo para encontrar montos exactos sin demoras.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -69,7 +69,6 @@ def get_mes_espanol(fecha):
 # 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def find_first_amount_in_row(row):
-    """Busca el monto en cualquier columna de la fila"""
     for i in range(1, min(len(row), 15)):
         val = clean_currency_str(safe_get(row, i, 0))
         if abs(val) > Decimal("0.01"):
@@ -170,14 +169,17 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# 4. SOLVER MATEMÁTICO
+# 4. SOLVER MATEMÁTICO (RÁPIDO)
 # ======================================================
 def subset_sum_solver(items, objetivo):
-    tolerancia = Decimal("0.50") 
+    tolerancia = Decimal("0.50")
     objetivo_norm = objetivo.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+    
+    # Ordenamos por valor para probar combinaciones lógicas primero
     items_sorted = sorted(items, key=lambda x: abs(x["val"]), reverse=True)
     
-    for r in range(1, min(len(items_sorted), 8) + 1):
+    # Límite de profundidad (max 6 items combinados) para evitar congelamiento
+    for r in range(1, min(len(items_sorted), 7) + 1):
         for combo in itertools.combinations(items_sorted, r):
             suma = sum(x["val"] for x in combo)
             suma_norm = suma.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
@@ -186,7 +188,7 @@ def subset_sum_solver(items, objetivo):
     return None
 
 # ======================================================
-# 5. ASIGNACIÓN INTELIGENTE
+# 5. ASIGNACIÓN INTELIGENTE (FILTRO AGRESIVO)
 # ======================================================
 def apply_vendor_logic_smart(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
@@ -206,10 +208,12 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
         
         if not metas: continue
 
+        # 1. Caso Sencillo
         if len(metas) == 1:
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
+        # 2. Caso Complejo: Preparar datos
         items_todos = []
         for idx in indices:
             raw_val = g.at[idx, "VENTA SUBTOTAL"]
@@ -217,27 +221,42 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             items_todos.append({"idx": idx, "val": val_dec})
             
         usados = set()
+        
+        # CLAVE 1: Ordenar metas de MENOR A MAYOR (Primero los montos pequeños fáciles)
         metas.sort(key=lambda x: abs(x["META"]), reverse=False) 
         
+        # Procesamos todos MENOS el último (el último se queda con el resto)
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
-            sol = None
             
+            # Obtener items disponibles
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            zona_caliente = items_disponibles[-30:] 
-            sol = subset_sum_solver(zona_caliente, objetivo)
+            # CLAVE 2: FILTRO AGRESIVO (LA TIJERA)
+            # Si busco 114 pesos, borro de la lista todo lo que sea mayor a 116 pesos.
+            # Esto reduce la lista drásticamente y hace el cálculo instantáneo.
+            margen = Decimal("2.00")
+            pool_filtrado = [x for x in items_disponibles if abs(x["val"]) <= (abs(objetivo) + margen)]
             
-            if not sol:
-                pool_global = [x for x in items_disponibles if abs(x["val"]) <= (abs(objetivo) + Decimal("2.00"))]
-                sol = subset_sum_solver(pool_global, objetivo)
+            # Intentar resolver con la lista pequeña
+            sol = subset_sum_solver(pool_filtrado, objetivo)
 
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
-            
+            else:
+                # Si falló con el filtro agresivo (raro), probamos con los últimos 15 items
+                # (A veces el sistema pone al final lo que capturó el segundo vendedor)
+                zona_caliente = items_disponibles[-15:]
+                sol_retry = subset_sum_solver(zona_caliente, objetivo)
+                if sol_retry:
+                    for it in sol_retry:
+                        df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
+                        usados.add(it["idx"])
+
+        # CLAVE 3: EL SOBRANTE ES DEL MAYOR
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         if remaining_indices:
@@ -279,7 +298,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df["SUCURSAL"] = sucursal
                 
                 # 3. Asignación
-                prog_bar.progress(60, text="🧮 Asignando Vendedores...")
+                prog_bar.progress(60, text="🧮 Asignando Vendedores (Filtro Rápido)...")
                 df = apply_vendor_logic_smart(df, mapa)
                 
                 # 4. Catálogo
@@ -320,7 +339,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 time.sleep(0.5)
                 prog_bar.empty()
                 
-                # === RESULTADOS ===
                 st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
                 st.dataframe(df_final.head(10)) 
                 
@@ -328,7 +346,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
-                # NOMBRE DE ARCHIVO RESTAURADO: {SUCURSAL}_Ventas_{AÑO}_MASTER.xlsx
                 nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                 
                 st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
