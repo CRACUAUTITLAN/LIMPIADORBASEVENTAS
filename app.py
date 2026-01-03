@@ -12,6 +12,7 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP
 # CONFIGURACIÓN INICIAL
 # ======================================================
 getcontext().prec = 12
+
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
 if 'id_limpieza' not in st.session_state:
@@ -30,14 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-# TÍTULO VERSIÓN FINAL CON BARRA DE PROGRESO
-st.title("🏭 Generador de Base Maestra (Versión Final)")
-st.markdown("""
-**Instrucciones:**
-1. Sube los archivos.
-2. Genera la base.
-3. Descarga.
-""")
+st.title("🏭 Generador de Base Maestra")
+st.info("💡 Versión Final: Lógica de asignación exacta activa + Interfaz limpia.")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -66,21 +61,15 @@ def safe_get(row, index, default=None):
     except: return default
 
 def get_mes_espanol(fecha):
-    if pd.isna(fecha): return "DESCONOCIDO"
-    try:
-        meses = {1:"ENERO", 2:"FEBRERO", 3:"MARZO", 4:"ABRIL", 5:"MAYO", 6:"JUNIO", 
-                 7:"JULIO", 8:"AGOSTO", 9:"SEPTIEMBRE", 10:"OCTUBRE", 11:"NOVIEMBRE", 12:"DICIEMBRE"}
-        return meses.get(fecha.month, "DESCONOCIDO")
-    except: return "DESCONOCIDO"
-
-def is_number(s):
-    try: float(str(s).replace(',', '')); return True
-    except: return False
+    meses = {1:"ENERO", 2:"FEBRERO", 3:"MARZO", 4:"ABRIL", 5:"MAYO", 6:"JUNIO", 
+             7:"JULIO", 8:"AGOSTO", 9:"SEPTIEMBRE", 10:"OCTUBRE", 11:"NOVIEMBRE", 12:"DICIEMBRE"}
+    return meses.get(fecha.month, "DESCONOCIDO")
 
 # ======================================================
 # 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def find_first_amount_in_row(row):
+    """Busca el monto en cualquier columna de la fila"""
     for i in range(1, min(len(row), 15)):
         val = clean_currency_str(safe_get(row, i, 0))
         if abs(val) > Decimal("0.01"):
@@ -196,6 +185,9 @@ def subset_sum_solver(items, objetivo):
                 return combo
     return None
 
+# ======================================================
+# 5. ASIGNACIÓN INTELIGENTE
+# ======================================================
 def apply_vendor_logic_smart(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
     for factura, g in df.groupby("FACTURA"):
@@ -231,6 +223,7 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
             sol = None
+            
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
             zona_caliente = items_disponibles[-30:] 
@@ -253,46 +246,45 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
     return df
 
 # ======================================================
-# 5. EJECUCIÓN CON BARRA DE PROGRESO
+# 6. EJECUCIÓN
 # ======================================================
 uid = st.session_state['id_limpieza']
 
-st.subheader("1. Carga de Archivos")
-col1, col2, col3 = st.columns(3)
+def is_number(s):
+    try: float(str(s).replace(',', '')); return True
+    except: return False
 
-with col1: file_sucio = st.file_uploader("1. Reporte BPro (.xls)", type=["xls"], key=f"b_{uid}")
-with col2: file_vendedores = st.file_uploader("2. Reporte Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
-with col3: file_catalogo = st.file_uploader("3. Catálogo Partes (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
+col1, col2, col3 = st.columns(3)
+with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls"], key=f"b_{uid}")
+with col2: file_vend = st.file_uploader("2. Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
+with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
 
 if st.button("🚀 GENERAR BASE MAESTRA"):
-    if not (file_sucio and file_vendedores and file_catalogo):
+    if not (file_bpro and file_vend and file_cat):
         st.warning("⚠️ Sube los 3 archivos.")
     else:
-        # AQUI ESTA LA BARRA DE PROGRESO QUE TE GUSTA
-        prog_bar = st.progress(0, text="Iniciando motor de cálculo...")
-        
+        prog_bar = st.progress(0, text="Iniciando...")
         try:
             # 1. Vendedores
             prog_bar.progress(10, text="📖 Leyendo Vendedores...")
-            mapa = process_vendedores_file(file_vendedores)
+            mapa = process_vendedores_file(file_vend)
             
             # 2. BPro
-            prog_bar.progress(30, text="🏭 Procesando BPro...")
-            df = process_main_bpro(file_sucio)
+            prog_bar.progress(30, text="🏭 Leyendo BPro...")
+            df = process_main_bpro(file_bpro)
             
             if df.empty:
                 st.error("Error: BPro vacío.")
-                prog_bar.empty()
             else:
                 df["SUCURSAL"] = sucursal
                 
-                # 3. Asignación (Solver)
-                prog_bar.progress(60, text="🧮 Ejecutando Solver Matemático...")
+                # 3. Asignación
+                prog_bar.progress(60, text="🧮 Asignando Vendedores...")
                 df = apply_vendor_logic_smart(df, mapa)
                 
                 # 4. Catálogo
                 prog_bar.progress(80, text="📚 Cruzando Catálogo...")
-                df_cat = pd.read_excel(file_catalogo)
+                df_cat = pd.read_excel(file_cat)
                 df["NP"] = df["NP"].astype(str).str.strip()
                 df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
                 df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
@@ -310,7 +302,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df_final.loc[mask_err, "UTILIDAD"] = df_final.loc[mask_err, "VENTA SUBTOTAL"] - df_final.loc[mask_err, "COSTO DE VENTA"]
 
                 df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
-                
                 if anio_texto.isdigit():
                     df_final = df_final[df_final["FECHA_DT"].dt.year == int(anio_texto)]
                 
@@ -325,12 +316,11 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     if c not in df_final.columns: df_final[c] = 0
                 df_final = df_final[cols_fin]
 
-                # FIN DEL PROCESO
-                prog_bar.progress(100, text="✅ Proceso Completado.")
+                prog_bar.progress(100, text="✅ Listo.")
                 time.sleep(0.5)
                 prog_bar.empty()
                 
-                # RESULTADOS
+                # === RESULTADOS ===
                 st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
                 st.dataframe(df_final.head(10)) 
                 
@@ -338,13 +328,11 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
+                # NOMBRE DE ARCHIVO RESTAURADO: {SUCURSAL}_Ventas_{AÑO}_MASTER.xlsx
                 nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                 
-                st.download_button(
-                    label=f"📥 Descargar {nombre_archivo}", 
-                    data=buffer.getvalue(), 
-                    file_name=nombre_archivo,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
+                                 file_name=nombre_archivo,
+                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
-            st.error(f"Error Técnico: {e}")
+            st.error(f"Error: {e}")
