@@ -31,8 +31,8 @@ with st.sidebar:
     sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
     anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
 
-st.title("🏭 Generador de Base Maestra (Versión Final Rastreador)")
-st.info("💡 Solución Activa: El sistema ahora busca el monto en cualquier columna de la fila del vendedor.")
+st.title("🏭 Generador de Base Maestra (Versión Final)")
+st.info("💡 Solución Activa: Rastreador inteligente de montos + Lógica de asignación exacta (Menor a Mayor).")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -73,10 +73,10 @@ def get_mes_espanol(fecha):
 # ======================================================
 def find_first_amount_in_row(row):
     """Busca el primer número válido en la fila (ignorando la col 0 que es la factura)"""
-    # Escaneamos de la columna 1 a la 10
+    # Escaneamos de la columna 1 a la 15 por si acaso
     for i in range(1, min(len(row), 15)):
         val = clean_currency_str(safe_get(row, i, 0))
-        # Si es un número válido y mayor a 0 (o menor a 0 significativo)
+        # Si es un número válido y mayor a 1 centavo
         if abs(val) > Decimal("0.01"):
             return val
     return Decimal(0)
@@ -86,9 +86,6 @@ def process_vendedores_file(uploaded_file):
     vendedores_map = {}
     current_vendedor = "SIN VENDEDOR"
     
-    # Debug list para mostrar al usuario
-    debug_data = []
-
     for _, row in df.iterrows():
         texto = str(safe_get(row, 0, "")).strip()
         
@@ -98,30 +95,26 @@ def process_vendedores_file(uploaded_file):
         if any(c.isdigit() for c in texto):
             factura = texto
             
-            # === AQUÍ ESTABA EL ERROR ===
-            # En lugar de asumir columna 1, BUSCAMOS el monto.
-            pos = find_first_amount_in_row(row)
+            # Buscamos el monto en cualquier columna
+            monto = find_first_amount_in_row(row)
             
-            # Asumimos devolución si encontramos otro valor negativo más adelante?
-            # Por seguridad, si pos es negativo, lo tratamos como negativo.
-            if pos < 0:
-                neg = pos
-                pos = Decimal(0)
-            else:
+            # Clasificamos según el signo encontrado
+            if monto >= 0:
+                pos = monto
                 neg = Decimal(0)
+            else:
+                pos = Decimal(0)
+                neg = monto
 
             vendedores_map.setdefault(factura, []).append({
                 "VENDEDOR": current_vendedor,
                 "POS": pos,
                 "NEG": neg
             })
-            
-            # Guardamos para verificar
-            debug_data.append({"VENDEDOR": current_vendedor, "FACTURA": factura, "MONTO DETECTADO": float(pos)})
         else:
             current_vendedor = texto
             
-    return vendedores_map, pd.DataFrame(debug_data)
+    return vendedores_map
 
 # ======================================================
 # 3. PROCESAMIENTO BPRO
@@ -238,7 +231,8 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             items_todos.append({"idx": idx, "val": val_dec})
             
         usados = set()
-        metas.sort(key=lambda x: abs(x["META"]), reverse=False) # Menor a Mayor
+        # Ordenamos de MENOR A MAYOR para resolver primero los casos tipo Alejandro
+        metas.sort(key=lambda x: abs(x["META"]), reverse=False) 
         
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
@@ -247,12 +241,12 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
             
             items_disponibles = [x for x in items_todos if x["idx"] not in usados]
             
-            # ZONA CALIENTE (ÚLTIMOS 30)
+            # ESTRATEGIA 1: ZONA CALIENTE (Los últimos items suelen ser de quien llegó tarde)
             zona_caliente = items_disponibles[-30:] 
             sol = subset_sum_solver(zona_caliente, objetivo)
             
             if not sol:
-                # BÚSQUEDA GLOBAL
+                # ESTRATEGIA 2: BÚSQUEDA GLOBAL CON FILTRO
                 pool_global = [x for x in items_disponibles if abs(x["val"]) <= (abs(objetivo) + Decimal("2.00"))]
                 sol = subset_sum_solver(pool_global, objetivo)
 
@@ -261,7 +255,7 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
             
-        # Resto al Mayor
+        # El resto se lo asignamos al vendedor con la meta más grande (el último de la lista)
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         if remaining_indices:
@@ -274,14 +268,14 @@ def apply_vendor_logic_smart(df, mapa_vendedores):
 # ======================================================
 uid = st.session_state['id_limpieza']
 
+def is_number_check(s):
+    try: float(str(s).replace(',', '')); return True
+    except: return False
+
 col1, col2, col3 = st.columns(3)
 with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls"], key=f"b_{uid}")
 with col2: file_vend = st.file_uploader("2. Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
 with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
-
-def is_number(s):
-    try: float(str(s).replace(',', '')); return True
-    except: return False
 
 if st.button("🚀 GENERAR BASE MAESTRA"):
     if not (file_bpro and file_vend and file_cat):
@@ -291,13 +285,8 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
         try:
             # 1. Vendedores
             prog_bar.progress(10, text="📖 Leyendo Vendedores...")
-            mapa, debug_df = process_vendedores_file(file_vend)
+            mapa = process_vendedores_file(file_vend)
             
-            # --- DEBUGGER VISUAL ---
-            st.write("🔎 **Verificación de Vendedores Detectados:** (Revisa si aparece Alejandro con 114.26)")
-            st.dataframe(debug_df.head(20))
-            # -----------------------
-
             # 2. BPro
             prog_bar.progress(30, text="🏭 Leyendo BPro...")
             df = process_main_bpro(file_bpro)
@@ -346,14 +335,20 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df_final = df_final[cols_fin]
 
                 prog_bar.progress(100, text="✅ Listo.")
+                time.sleep(0.5)
+                prog_bar.empty()
                 
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_final.to_excel(writer, index=False, sheet_name='Datos')
                 
                 st.success("Archivo Generado Exitosamente")
+                
+                # Nombre corregido aquí: {SUCURSAL}_Ventas_{AÑO}_MASTER.xlsx
+                nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
+                
                 st.download_button(f"📥 Descargar {sucursal}", data=buffer.getvalue(), 
-                                 file_name=f"{sucursal}_MASTER.xlsx",
+                                 file_name=nombre_archivo,
                                  mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
             st.error(f"Error: {e}")
