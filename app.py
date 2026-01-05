@@ -16,10 +16,12 @@ getcontext().prec = 12
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
 # ======================================================
-# SISTEMA DE PROTECCIÓN (LOGIN) - NUEVO
+# SISTEMA DE PROTECCIÓN (LOGIN)
 # ======================================================
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
+if 'usuario_activo' not in st.session_state:
+    st.session_state['usuario_activo'] = ""
 
 # Credenciales de acceso
 CREDENTIALS = {
@@ -30,6 +32,7 @@ CREDENTIALS = {
 def check_login(user, password):
     if CREDENTIALS.get(user) == password:
         st.session_state['authenticated'] = True
+        st.session_state['usuario_activo'] = user # Guardamos quién entró
         st.rerun()
     else:
         st.error("🚫 Contraseña incorrecta")
@@ -48,7 +51,7 @@ if not st.session_state['authenticated']:
         check_login(selected_user, input_pass)
     
     st.info("Si necesitas acceso, contacta al administrador.")
-    st.stop() # Detiene la ejecución del resto del código hasta loguearse
+    st.stop() 
 
 # ======================================================
 # FIN SISTEMA DE PROTECCIÓN
@@ -64,9 +67,20 @@ def reset_all():
 # BARRA LATERAL
 # ======================================================
 with st.sidebar:
-    st.write(f"👤 **Usuario:** {selected_user if 'selected_user' in locals() else 'Admin'}")
+    # Lógica de visualización del nombre
+    usuario_actual = st.session_state['usuario_activo']
+    
+    # Aquí definimos cómo se ve cada uno
+    if usuario_actual == "Eduardo Barrera":
+        etiqueta_visual = "Admin"
+    else:
+        etiqueta_visual = usuario_actual
+
+    st.write(f"👤 **Usuario:** {etiqueta_visual}")
+    
     if st.button("🔒 Cerrar Sesión"):
         st.session_state['authenticated'] = False
+        st.session_state['usuario_activo'] = ""
         st.rerun()
     
     st.markdown("---")
@@ -115,7 +129,7 @@ def get_mes_espanol(fecha):
 # ======================================================
 def find_first_amount_in_row(row):
     """Busca el monto en cualquier columna (Estrategia de barrido rápido)"""
-    for i in range(1, min(len(row), 10)): # Limitamos escaneo a col 10 para velocidad
+    for i in range(1, min(len(row), 10)): 
         val = clean_currency_str(safe_get(row, i, 0))
         if abs(val) > Decimal("0.01"):
             return val
@@ -128,7 +142,6 @@ def process_vendedores_file(uploaded_file):
     
     for _, row in df.iterrows():
         texto = str(safe_get(row, 0, "")).strip()
-        # Filtro rápido de basura
         if not texto or len(texto) < 3 or texto.lower() in ["venta", "nan", "total", "iva"]: continue
 
         if any(c.isdigit() for c in texto):
@@ -170,7 +183,6 @@ def process_main_bpro(uploaded_file):
             col_a = str(safe_get(row, 0, "")).strip()
             col_b = str(safe_get(row, 1, "")).strip()
             
-            # Lógica rápida de detección de encabezados
             if "Utilidad" in col_b:
                 current_client = clean_client_name(col_a)
                 current_factura = None
@@ -182,7 +194,6 @@ def process_main_bpro(uploaded_file):
             col_c = safe_get(row, 2)
             val_b = safe_get(row, 1, "")
             
-            # Detectar Factura (Optimizada)
             if (col_a.startswith("DA") or is_number(val_b)) and is_valid_date(col_c):
                 current_factura = col_a
                 current_fecha = col_c
@@ -194,7 +205,6 @@ def process_main_bpro(uploaded_file):
             if col_a in ["ID Parte", "nan", "", "Diario de Ventas", "Página"]: continue
 
             if current_client and current_factura:
-                # Solo procesamos si hay datos numéricos clave
                 subtotal = clean_currency_str(safe_get(row, 7, 0))
                 utilidad = clean_currency_str(safe_get(row, 10, 0))
 
@@ -224,23 +234,11 @@ def process_main_bpro(uploaded_file):
 # 4. SOLVER MATEMÁTICO (ULTRA RÁPIDO)
 # ======================================================
 def subset_sum_solver_fast(items, objetivo):
-    """
-    Versión optimizada para velocidad:
-    1. Filtra items imposibles (mayores al objetivo).
-    2. Limita la profundidad de combinación a 5 items máx.
-    """
     tolerancia = Decimal("0.50")
     objetivo_norm = objetivo.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
     
-    # 1. FILTRO DE TIJERA: Solo nos quedamos con items que "quepan" en el objetivo.
-    # Si busco 114, elimino todo lo mayor a 116.
     items_validos = [x for x in items if abs(x["val"]) <= (abs(objetivo_norm) + Decimal("2.00"))]
-    
-    # Si hay demasiados items válidos, tomamos solo los 20 más cercanos o grandes para probar
     items_sorted = sorted(items_validos, key=lambda x: abs(x["val"]), reverse=True)[:25]
-    
-    # 2. PROFUNDIDAD LIMITADA: Solo buscamos combinaciones de hasta 5 elementos.
-    # Es muy raro que un vendedor tenga más de 5 partidas dispersas en una factura compartida.
     max_depth = min(len(items_sorted), 5)
     
     for r in range(1, max_depth + 1):
@@ -256,8 +254,6 @@ def subset_sum_solver_fast(items, objetivo):
 # ======================================================
 def apply_vendor_logic_fast(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
-    
-    # Agrupamos todo BPro primero para no iterar dataframe mil veces
     grouped = df.groupby("FACTURA")
     
     for factura, g in grouped:
@@ -276,13 +272,10 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
         
         if not metas: continue
 
-        # === CASO 1: VENDEDOR ÚNICO (El 90% de los casos) ===
         if len(metas) == 1:
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # === CASO 2: VENDEDORES COMPARTIDOS (Alejandro vs Hugo) ===
-        # Preparar items de BPro (solo ID y Valor para ser rápidos)
         items_todos = []
         for idx in indices:
             raw_val = g.at[idx, "VENTA SUBTOTAL"]
@@ -290,31 +283,19 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
             items_todos.append({"idx": idx, "val": val_dec})
             
         usados = set()
-        
-        # ORDENAR: Primero resolvemos los montos PEQUEÑOS (Alejandro).
-        # El más grande (Hugo) se queda con el sobrante.
         metas.sort(key=lambda x: abs(x["META"]), reverse=False) 
         
-        # Procesamos todos menos el último (el Mayor)
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
-            
-            # Items disponibles
             pool = [x for x in items_todos if x["idx"] not in usados]
-            
-            # Ejecutar Solver Rápido
             sol = subset_sum_solver_fast(pool, objetivo)
 
             if sol:
                 for it in sol:
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
-            
-            # Si no encuentra match rápido, lo dejamos pasar. 
-            # Se asignará al vendedor mayor por defecto para no colgar el sistema.
 
-        # ASIGNAR REMANENTE AL VENDEDOR MAYOR
         vendedor_mayor = metas[-1]["VENDEDOR"]
         remaining_indices = [x["idx"] for x in items_todos if x["idx"] not in usados]
         if remaining_indices:
@@ -342,11 +323,9 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
     else:
         prog_bar = st.progress(0, text="Iniciando...")
         try:
-            # 1. Vendedores
             prog_bar.progress(10, text="📖 Leyendo Vendedores...")
             mapa = process_vendedores_file(file_vend)
             
-            # 2. BPro
             prog_bar.progress(30, text="🏭 Leyendo BPro...")
             df = process_main_bpro(file_bpro)
             
@@ -355,18 +334,15 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
             else:
                 df["SUCURSAL"] = sucursal
                 
-                # 3. Asignación Rápida
                 prog_bar.progress(60, text="🧮 Asignando Vendedores (Motor Turbo)...")
                 df = apply_vendor_logic_fast(df, mapa)
                 
-                # 4. Catálogo
                 prog_bar.progress(80, text="📚 Cruzando Catálogo...")
                 df_cat = pd.read_excel(file_cat)
                 df["NP"] = df["NP"].astype(str).str.strip()
                 df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
                 df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
                 
-                # Limpieza Final
                 mask_nocat = df_final['CATEGORIA'].isna()
                 df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
                 df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
@@ -398,7 +374,6 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 time.sleep(0.5)
                 prog_bar.empty()
                 
-                # === RESULTADOS ===
                 st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
                 st.dataframe(df_final.head(10)) 
                 
