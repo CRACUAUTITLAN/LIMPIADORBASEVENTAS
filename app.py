@@ -15,6 +15,45 @@ getcontext().prec = 12
 
 st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
+# ======================================================
+# SISTEMA DE PROTECCIÓN (LOGIN) - NUEVO
+# ======================================================
+if 'authenticated' not in st.session_state:
+    st.session_state['authenticated'] = False
+
+# Credenciales de acceso
+CREDENTIALS = {
+    "Manuel Salas": "Salas1234",
+    "Eduardo Barrera": "Barrera1234"
+}
+
+def check_login(user, password):
+    if CREDENTIALS.get(user) == password:
+        st.session_state['authenticated'] = True
+        st.rerun()
+    else:
+        st.error("🚫 Contraseña incorrecta")
+
+if not st.session_state['authenticated']:
+    st.title("🔒 Acceso Restringido")
+    st.markdown("### Por favor identifícate para continuar")
+    
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        selected_user = st.selectbox("Selecciona Usuario:", list(CREDENTIALS.keys()))
+    with col2:
+        input_pass = st.text_input("Contraseña:", type="password")
+    
+    if st.button("Ingresar al Sistema"):
+        check_login(selected_user, input_pass)
+    
+    st.info("Si necesitas acceso, contacta al administrador.")
+    st.stop() # Detiene la ejecución del resto del código hasta loguearse
+
+# ======================================================
+# FIN SISTEMA DE PROTECCIÓN
+# ======================================================
+
 if 'id_limpieza' not in st.session_state:
     st.session_state['id_limpieza'] = 0
 
@@ -25,6 +64,12 @@ def reset_all():
 # BARRA LATERAL
 # ======================================================
 with st.sidebar:
+    st.write(f"👤 **Usuario:** {selected_user if 'selected_user' in locals() else 'Admin'}")
+    if st.button("🔒 Cerrar Sesión"):
+        st.session_state['authenticated'] = False
+        st.rerun()
+    
+    st.markdown("---")
     st.header("⚙️ Configuración")
     st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary")
     st.markdown("---")
