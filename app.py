@@ -13,7 +13,7 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP
 # ======================================================
 getcontext().prec = 12
 
-st.set_page_config(page_title="Generador Base Modelo BI, layout="wide")
+st.set_page_config(page_title="Generador Master BPro", layout="wide")
 
 # ======================================================
 # SISTEMA DE PROTECCIÓN (LOGIN)
