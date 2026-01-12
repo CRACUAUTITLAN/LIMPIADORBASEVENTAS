@@ -13,7 +13,7 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP
 # ======================================================
 getcontext().prec = 12
 
-st.set_page_config(page_title="Generador Master BPro", layout="wide")
+st.set_page_config(page_title="Generador Base Modelo BI, layout="wide")
 
 # ======================================================
 # SISTEMA DE PROTECCIÓN (LOGIN)
@@ -64,47 +64,51 @@ def reset_all():
     st.session_state['id_limpieza'] += 1
 
 # ======================================================
-# BARRA LATERAL (SOLO UTILIDADES)
+# BARRA SUPERIOR (USUARIO Y LOGOUT)
 # ======================================================
-with st.sidebar:
-    # Lógica de visualización del nombre
-    usuario_actual = st.session_state['usuario_activo']
-    
-    # Aquí definimos cómo se ve cada uno
-    if usuario_actual == "Eduardo Barrera":
-        etiqueta_visual = "Admin"
-    else:
-        etiqueta_visual = usuario_actual
+# Usamos columnas para poner el título a la izquierda y el usuario/logout a la derecha
+col_header1, col_header2 = st.columns([3, 1])
 
-    st.write(f"👤 **Usuario:** {etiqueta_visual}")
+with col_header1:
+    st.title("🏭 Generador de Base: Modelo BI")
+
+with col_header2:
+    usuario_actual = st.session_state['usuario_activo']
+    # Etiqueta visual
+    etiqueta = "Admin" if usuario_actual == "Eduardo Barrera" else usuario_actual
     
-    if st.button("🔒 Cerrar Sesión"):
+    # Contenedor alineado a la derecha visualmente
+    st.markdown(f"<div style='text-align: right;'>👤 <b>{etiqueta}</b></div>", unsafe_allow_html=True)
+    if st.button("🔒 Cerrar Sesión", use_container_width=True):
         st.session_state['authenticated'] = False
         st.session_state['usuario_activo'] = ""
         st.rerun()
-    
-    st.markdown("---")
-    st.header("⚙️ Utilidades")
-    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary")
-    # SE ELIMINARON LOS INPUTS DE AQUÍ COMO PEDISTE
+
+st.markdown("---")
 
 # ======================================================
-# INTERFAZ PRINCIPAL (CABECERA Y CONFIGURACIÓN)
+# INTERFAZ PRINCIPAL (CONFIGURACIÓN INTEGRADA)
 # ======================================================
-st.title("🏭 Generador de Base Maestra")
 
-# --- NUEVA SECCIÓN DE CONFIGURACIÓN ---
 st.markdown("### 1. Configuración General")
-col_conf1, col_conf2 = st.columns(2)
+
+# Ahora usamos 3 columnas para integrar el botón de limpiar aquí mismo
+col_conf1, col_conf2, col_conf3 = st.columns([1, 1, 1])
 
 with col_conf1:
-    # Selección de Agencia (Primer elemento)
-    sucursal = st.selectbox("🏢 Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
+    # Selección de Agencia
+    sucursal = st.selectbox("🏢 Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
 
 with col_conf2:
-    # Selección de Año (Automático basado en fecha actual)
-    anio_actual_sistema = str(datetime.now().year) # Detecta si es 2026, 2027, etc.
-    anio_texto = st.text_input("📅 Escribe el año a trabajar:", value=anio_actual_sistema)
+    # Selección de Año (Automático)
+    anio_actual_sistema = str(datetime.now().year)
+    anio_texto = st.text_input("📅 Año de Trabajo:", value=anio_actual_sistema)
+
+with col_conf3:
+    # Botón de Limpiar Base (Alineado visualmente con los inputs)
+    st.write("") # Espacio para alinear verticalmente con los inputs
+    st.write("") 
+    st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", use_container_width=True)
 
 st.info("💡 Modo Turbo: Estrategia de asignación prioritaria por monto menor activada.")
 st.markdown("---")
