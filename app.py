@@ -64,7 +64,7 @@ def reset_all():
     st.session_state['id_limpieza'] += 1
 
 # ======================================================
-# BARRA LATERAL
+# BARRA LATERAL (SOLO UTILIDADES)
 # ======================================================
 with st.sidebar:
     # Lógica de visualización del nombre
@@ -84,14 +84,30 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    st.header("⚙️ Configuración")
+    st.header("⚙️ Utilidades")
     st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary")
-    st.markdown("---")
-    sucursal = st.selectbox("Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
-    anio_texto = st.text_input("Escribe el año a trabajar:", value="2025")
+    # SE ELIMINARON LOS INPUTS DE AQUÍ COMO PEDISTE
 
+# ======================================================
+# INTERFAZ PRINCIPAL (CABECERA Y CONFIGURACIÓN)
+# ======================================================
 st.title("🏭 Generador de Base Maestra")
-st.info("💡 Modo Turbo: Estrategia de asignación prioritaria por monto menor.")
+
+# --- NUEVA SECCIÓN DE CONFIGURACIÓN ---
+st.markdown("### 1. Configuración General")
+col_conf1, col_conf2 = st.columns(2)
+
+with col_conf1:
+    # Selección de Agencia (Primer elemento)
+    sucursal = st.selectbox("🏢 Selecciona la Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
+
+with col_conf2:
+    # Selección de Año (Automático basado en fecha actual)
+    anio_actual_sistema = str(datetime.now().year) # Detecta si es 2026, 2027, etc.
+    anio_texto = st.text_input("📅 Escribe el año a trabajar:", value=anio_actual_sistema)
+
+st.info("💡 Modo Turbo: Estrategia de asignación prioritaria por monto menor activada.")
+st.markdown("---")
 
 # ======================================================
 # 1. FUNCIONES AUXILIARES
@@ -311,6 +327,8 @@ uid = st.session_state['id_limpieza']
 def is_number(s):
     try: float(str(s).replace(',', '')); return True
     except: return False
+
+st.markdown("### 2. Carga de Archivos")
 
 col1, col2, col3 = st.columns(3)
 with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls"], key=f"b_{uid}")
