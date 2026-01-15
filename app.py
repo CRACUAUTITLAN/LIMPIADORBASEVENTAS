@@ -66,7 +66,6 @@ def reset_all():
 # ======================================================
 # BARRA SUPERIOR (USUARIO Y LOGOUT)
 # ======================================================
-# Usamos columnas para poner el título a la izquierda y el usuario/logout a la derecha
 col_header1, col_header2 = st.columns([3, 1])
 
 with col_header1:
@@ -74,10 +73,8 @@ with col_header1:
 
 with col_header2:
     usuario_actual = st.session_state['usuario_activo']
-    # Etiqueta visual
     etiqueta = "Admin" if usuario_actual == "Eduardo Barrera" else usuario_actual
     
-    # Contenedor alineado a la derecha visualmente
     st.markdown(f"<div style='text-align: right;'>👤 <b>{etiqueta}</b></div>", unsafe_allow_html=True)
     if st.button("🔒 Cerrar Sesión", use_container_width=True):
         st.session_state['authenticated'] = False
@@ -92,21 +89,17 @@ st.markdown("---")
 
 st.markdown("### 1. Configuración General")
 
-# Ahora usamos 3 columnas para integrar el botón de limpiar aquí mismo
 col_conf1, col_conf2, col_conf3 = st.columns([1, 1, 1])
 
 with col_conf1:
-    # Selección de Agencia
     sucursal = st.selectbox("🏢 Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
 
 with col_conf2:
-    # Selección de Año (Automático)
     anio_actual_sistema = str(datetime.now().year)
     anio_texto = st.text_input("📅 Año de Trabajo:", value=anio_actual_sistema)
 
 with col_conf3:
-    # Botón de Limpiar Base (Alineado visualmente con los inputs)
-    st.write("") # Espacio para alinear verticalmente con los inputs
+    st.write("") 
     st.write("") 
     st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", use_container_width=True)
 
@@ -148,7 +141,6 @@ def get_mes_espanol(fecha):
 # 2. PROCESAMIENTO VENDEDORES
 # ======================================================
 def find_first_amount_in_row(row):
-    """Busca el monto en cualquier columna (Estrategia de barrido rápido)"""
     for i in range(1, min(len(row), 10)): 
         val = clean_currency_str(safe_get(row, i, 0))
         if abs(val) > Decimal("0.01"):
@@ -386,6 +378,35 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                 
                 df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
+
+                # =========================================================================
+                #  🕵️‍♂️ DETECTOR AUTOMÁTICO DE BAJIO
+                # =========================================================================
+                prog_bar.progress(90, text="🔍 Verificando asignaciones de BAJIO...")
+
+                # 1. Definimos el "ADN" de Bajío (Lista oficial de nombres)
+                LISTA_BAJIO_ALMACENES = [
+                    "ALM. UTEP SAN LUIS", 
+                    "BISONTE SLP"
+                ]
+                LISTA_BAJIO_VENDEDORES = [
+                    "PAULINO SANCHEZ MENDEZ",
+                    "DANIELA OLGUIN MARTINEZ",
+                    "JUAN PABLO RODRIGUEZ LOREDO"
+                ]
+
+                # 2. Convertimos temporalmente a mayúsculas para comparar (sin afectar el dato original)
+                col_alm_temp = df_final["ALMACEN"].astype(str).str.strip().str.upper()
+                col_vend_temp = df_final["VENDEDOR"].astype(str).str.strip().str.upper()
+
+                # 3. Aplicamos el cambio: Si coincide Almacén O Vendedor -> Es BAJIO
+                mask_es_bajio = (col_alm_temp.isin(LISTA_BAJIO_ALMACENES)) | (col_vend_temp.isin(LISTA_BAJIO_VENDEDORES))
+                
+                if mask_es_bajio.any():
+                    df_final.loc[mask_es_bajio, "SUCURSAL"] = "BAJIO"
+                    st.toast(f"✅ Se detectaron y reasignaron {mask_es_bajio.sum()} registros a BAJIO", icon="🌵")
+                
+                # =========================================================================
                 
                 cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
                 for c in cols_fin:
@@ -406,7 +427,7 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                 
                 st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
-                                 file_name=nombre_archivo,
-                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                     file_name=nombre_archivo,
+                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
             st.error(f"Error: {e}")
