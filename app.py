@@ -379,34 +379,39 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 
                 df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
-                # =========================================================================
-                #  🕵️‍♂️ DETECTOR AUTOMÁTICO DE BAJIO
-                # =========================================================================
-                prog_bar.progress(90, text="🔍 Verificando asignaciones de BAJIO...")
+                # ==============================================================================
+                #  🕵️‍♂️ LÓGICA DE REASIGNACIÓN BAJIO (ACTUALIZADO CON TUS DATOS)
+                # ==============================================================================
+                prog_bar.progress(95, text="🌵 Verificando asignaciones de BAJIO...")
 
-                # 1. Definimos el "ADN" de Bajío (Lista oficial de nombres)
-                LISTA_BAJIO_ALMACENES = [
-                    "ALM. UTEP SAN LUIS", 
+                # 1. Definir los disparadores de BAJIO (Vendedores y Almacenes Clave)
+                # Agregué también a "PAULINO SANCHEZ MENDEZ" porque viene en tus datos de ejemplo.
+                BAJIO_VENDEDORES = [
+                    "DANIELA OLGUIN MARTINEZ",
+                    "JUAN PABLO RODRIGUEZ LOREDO",
+                    "PAULINO SANCHEZ MENDEZ"
+                ]
+
+                BAJIO_ALMACENES = [
+                    "ALM. UTEP SAN LUIS",
                     "BISONTE SLP"
                 ]
-                LISTA_BAJIO_VENDEDORES = [
-                    "PAULINO SANCHEZ MENDEZ",
-                    "DANIELA OLGUIN MARTINEZ",
-                    "JUAN PABLO RODRIGUEZ LOREDO"
-                ]
 
-                # 2. Convertimos temporalmente a mayúsculas para comparar (sin afectar el dato original)
-                col_alm_temp = df_final["ALMACEN"].astype(str).str.strip().str.upper()
-                col_vend_temp = df_final["VENDEDOR"].astype(str).str.strip().str.upper()
+                # 2. Creamos columnas temporales NORMALIZADAS (Mayúsculas y sin espacios) para la comparación
+                #    Esto evita que "Bisonte SLP" o "BISONTE SLP " fallen.
+                vendedor_check = df_final["VENDEDOR"].astype(str).str.strip().str.upper()
+                almacen_check = df_final["ALMACEN"].astype(str).str.strip().str.upper()
 
-                # 3. Aplicamos el cambio: Si coincide Almacén O Vendedor -> Es BAJIO
-                mask_es_bajio = (col_alm_temp.isin(LISTA_BAJIO_ALMACENES)) | (col_vend_temp.isin(LISTA_BAJIO_VENDEDORES))
-                
-                if mask_es_bajio.any():
-                    df_final.loc[mask_es_bajio, "SUCURSAL"] = "BAJIO"
-                    st.toast(f"✅ Se detectaron y reasignaron {mask_es_bajio.sum()} registros a BAJIO", icon="🌵")
-                
-                # =========================================================================
+                # 3. Detectar coincidencias
+                mask_bajio = (vendedor_check.isin(BAJIO_VENDEDORES)) | (almacen_check.isin(BAJIO_ALMACENES))
+
+                # 4. Aplicar el cambio de Sucursal
+                cantidad_bajio = mask_bajio.sum()
+                if cantidad_bajio > 0:
+                    df_final.loc[mask_bajio, "SUCURSAL"] = "BAJIO"
+                    st.toast(f"✅ Se detectaron {cantidad_bajio} registros de BAJIO y se actualizó su sucursal.", icon="🌵")
+
+                # ==============================================================================
                 
                 cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
                 for c in cols_fin:
