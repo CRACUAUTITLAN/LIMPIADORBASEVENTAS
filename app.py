@@ -137,6 +137,10 @@ def get_mes_espanol(fecha):
              7:"JULIO", 8:"AGOSTO", 9:"SEPTIEMBRE", 10:"OCTUBRE", 11:"NOVIEMBRE", 12:"DICIEMBRE"}
     return meses.get(fecha.month, "DESCONOCIDO")
 
+def is_number(s):
+    try: float(str(s).replace(',', '')); return True
+    except: return False
+
 # ======================================================
 # 2. PROCESAMIENTO VENDEDORES
 # ======================================================
@@ -320,10 +324,6 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
 # ======================================================
 uid = st.session_state['id_limpieza']
 
-def is_number(s):
-    try: float(str(s).replace(',', '')); return True
-    except: return False
-
 st.markdown("### 2. Carga de Archivos")
 
 col1, col2, col3 = st.columns(3)
@@ -352,11 +352,33 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df = apply_vendor_logic_fast(df, mapa)
                 
                 prog_bar.progress(80, text="📚 Cruzando Catálogo...")
+                
+                # ==============================================================================
+                # 🛑 ZONA DE SEGURIDAD BLINDADA (ANTIDUPLICADOS) 🛑
+                # ==============================================================================
+                
+                # 1. CARGA SEGURA DEL CATÁLOGO
                 df_cat = pd.read_excel(file_cat)
-                df["NP"] = df["NP"].astype(str).str.strip()
+                
+                # Convertimos NP a Texto + Quitamos espacios + Borramos Duplicados en Catálogo
+                # Esto previene el error del "Triangulito Verde"
                 df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
+                df_cat = df_cat.drop_duplicates(subset=['NP'], keep='first')
+                
+                # 2. LIMPIEZA DE LA BASE BPRO
+                # Convertimos NP a Texto para que coincida con el catálogo
+                df["NP"] = df["NP"].astype(str).str.strip()
+                
+                # Borramos filas EXACTAMENTE idénticas en BPro (fantasmas o errores de carga)
+                # OJO: No borra facturas partidas en dos hojas, solo borra copias exactas
+                df = df.drop_duplicates()
+                
+                # ==============================================================================
+                
+                # 3. CRUCE SEGURO 1 a 1
                 df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
                 
+                # POST-PROCESAMIENTO
                 mask_nocat = df_final['CATEGORIA'].isna()
                 df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
                 df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
@@ -380,12 +402,10 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                 df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
                 # ==============================================================================
-                #  🕵️‍♂️ LÓGICA DE REASIGNACIÓN BAJIO (ACTUALIZADO CON TUS DATOS)
+                #  🕵️‍♂️ LÓGICA DE REASIGNACIÓN BAJIO
                 # ==============================================================================
                 prog_bar.progress(95, text="🌵 Verificando asignaciones de BAJIO...")
 
-                # 1. Definir los disparadores de BAJIO (Vendedores y Almacenes Clave)
-                # Agregué también a "PAULINO SANCHEZ MENDEZ" porque viene en tus datos de ejemplo.
                 BAJIO_VENDEDORES = [
                     "DANIELA OLGUIN MARTINEZ",
                     "JUAN PABLO RODRIGUEZ LOREDO",
@@ -397,15 +417,11 @@ if st.button("🚀 GENERAR BASE MAESTRA"):
                     "BISONTE SLP"
                 ]
 
-                # 2. Creamos columnas temporales NORMALIZADAS (Mayúsculas y sin espacios) para la comparación
-                #    Esto evita que "Bisonte SLP" o "BISONTE SLP " fallen.
                 vendedor_check = df_final["VENDEDOR"].astype(str).str.strip().str.upper()
                 almacen_check = df_final["ALMACEN"].astype(str).str.strip().str.upper()
 
-                # 3. Detectar coincidencias
                 mask_bajio = (vendedor_check.isin(BAJIO_VENDEDORES)) | (almacen_check.isin(BAJIO_ALMACENES))
 
-                # 4. Aplicar el cambio de Sucursal
                 cantidad_bajio = mask_bajio.sum()
                 if cantidad_bajio > 0:
                     df_final.loc[mask_bajio, "SUCURSAL"] = "BAJIO"
