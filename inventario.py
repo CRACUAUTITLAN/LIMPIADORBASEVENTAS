@@ -14,26 +14,13 @@ def show():
     # ======================================================
     ALMACENES_POR_SUCURSAL = {
         "CUAUTITLAN": [
-            "ALM. GENERAL", 
-            "ALM. LIPU", 
-            "ALM. MYM", 
-            "Alm. Utep", 
-            "ALM. FAST FOOD", 
-            "ALM. BOÑAR"
+            "ALM. GENERAL", "ALM. LIPU", "ALM. MYM", "Alm. Utep", "ALM. FAST FOOD", "ALM. BOÑAR"
         ],
         "TULTITLAN": [
-            "ALM. GENERAL", 
-            "TUMSA", 
-            "BISONTE TEPOTZOTLAN", 
-            "TEISA", 
-            "CULVERT", 
-            "TDR", 
-            "ALMACEN AFN", 
-            "ZONTE"
+            "ALM. GENERAL", "TUMSA", "BISONTE TEPOTZOTLAN", "TEISA", "CULVERT", "TDR", "ALMACEN AFN", "ZONTE"
         ],
         "BAJIO": [
-            "ALM. UTEP SAN LUIS", 
-            "BISONTE SLP"
+            "ALM. UTEP SAN LUIS", "BISONTE SLP"
         ]
     }
 
@@ -44,18 +31,14 @@ def show():
         if uploaded_file is None: return None
         try:
             df = pd.read_excel(uploaded_file)
-            # Buscamos la columna NP
-            col_name = df.columns[0] # Asumimos la primera
-            # Si tiene nombre explícito lo usamos
+            col_name = df.columns[0]
             if 'Numero de Parte' in df.columns: col_name = 'Numero de Parte'
             if 'NP' in df.columns: col_name = 'NP'
             
             df.rename(columns={col_name: 'NP'}, inplace=True)
             df['NP'] = df['NP'].astype(str).str.strip()
-            # Quitamos duplicados para no inflar el inventario
             df = df.drop_duplicates(subset=['NP'], keep='first')
             
-            # Verificamos que existan las columnas de clasificacion
             cols_req = ['NP']
             if 'LINEA' in df.columns: cols_req.append('LINEA')
             if 'CATEGORIA' in df.columns: cols_req.append('CATEGORIA')
@@ -69,58 +52,74 @@ def show():
     # 3. INTERFAZ DE CARGA
     # ======================================================
     
-    # Solo pedimos el catálogo para enriquecer la data (Línea/Familia)
-    file_cat = st.file_uploader("📂 Cargar Catálogo de Partes (.xlsx) (Opcional pero recomendado)", type=["xlsx"], key="inv_cat")
+    file_cat = st.file_uploader("📂 Cargar Catálogo de Partes (.xlsx) (Opcional)", type=["xlsx"], key="inv_cat")
 
     inventarios_cargados = []
 
     st.markdown("### 📥 Carga de Inventarios por Agencia")
+    st.info("ℹ️ Nota: Carga los archivos en todas las pestañas necesarias y al final presiona el botón Generar.")
     
-    # Creamos las pestañas o columnas por sucursal
     tabs = st.tabs(list(ALMACENES_POR_SUCURSAL.keys()))
 
     for i, sucursal in enumerate(ALMACENES_POR_SUCURSAL.keys()):
         with tabs[i]:
             st.markdown(f"**Almacenes de {sucursal}**")
             lista_almacenes = ALMACENES_POR_SUCURSAL[sucursal]
-            
-            # Grid de carga (2 columnas para que no se vea eterno)
             col_a, col_b = st.columns(2)
             
             for idx, almacen in enumerate(lista_almacenes):
-                # Alternamos columnas
                 donde_pintar = col_a if idx % 2 == 0 else col_b
-                
                 with donde_pintar:
                     f_inv = st.file_uploader(f"📦 {almacen}", type=["xls", "xlsx"], key=f"inv_{sucursal}_{almacen}")
                     
                     if f_inv:
                         try:
-                            # Lectura sin encabezados (posicional)
+                            # 1. LECTURA RAW (Sin encabezados)
                             df_r = pd.read_excel(f_inv, header=None)
                             
+                            # 2. SELECCIÓN QUIRÚRGICA DE COLUMNAS (Indices base 0)
+                            # A=0, B=1, E=4, I=8, J=9, K=10, L=11, N=13
                             df_c = pd.DataFrame()
-                            # Mapeo Estricto: A(0)=NP, B(1)=Desc, E(4)=Costo, I(8)=Exist, J(9)=Ingreso, K(10)=Ult Comp, L(11)=Ult Vta
-                            df_c['NP'] = df_r.iloc[:,0].astype(str).str.strip()
-                            df_c['DESCRIPCION'] = df_r.iloc[:,1].astype(str).str.strip()
                             
-                            # Numéricos
-                            df_c['COSTO_UNITARIO'] = pd.to_numeric(df_r.iloc[:,4], errors='coerce').fillna(0)
-                            df_c['EXISTENCIA'] = pd.to_numeric(df_r.iloc[:,8], errors='coerce').fillna(0)
+                            # Datos Básicos
+                            df_c['NP'] = df_r.iloc[:, 0].astype(str).str.strip()
+                            df_c['DESCRIPCION'] = df_r.iloc[:, 1].astype(str).str.strip()
                             
-                            # Fechas (Solo guardamos la fecha, Power BI hará la matemática)
-                            df_c['FEC_INGRESO'] = pd.to_datetime(df_r.iloc[:,9], errors='coerce').dt.date
-                            df_c['FEC_ULT_COMPRA'] = pd.to_datetime(df_r.iloc[:,10], errors='coerce').dt.date
-                            df_c['FEC_ULT_VENTA_INV'] = pd.to_datetime(df_r.iloc[:,11], errors='coerce').dt.date # Fecha reportada por sistema inventario
+                            # Métricas
+                            df_c['COSTO_UNITARIO'] = pd.to_numeric(df_r.iloc[:, 4], errors='coerce').fillna(0)
+                            df_c['EXISTENCIA'] = pd.to_numeric(df_r.iloc[:, 8], errors='coerce').fillna(0)
+                            df_c['VALOR TOTAL'] = pd.to_numeric(df_r.iloc[:, 13], errors='coerce').fillna(0) # Columna N
                             
-                            # Etiquetas fijas
+                            # Fechas (La clave del filtro)
+                            # Usamos errors='coerce' para que si hay texto (encabezados) lo convierta en NaT (Nulo)
+                            df_c['FEC_INGRESO'] = pd.to_datetime(df_r.iloc[:, 9], errors='coerce')
+                            df_c['FEC_ULT_COMPRA'] = pd.to_datetime(df_r.iloc[:, 10], errors='coerce')
+                            df_c['FEC_ULT_VENTA_INV'] = pd.to_datetime(df_r.iloc[:, 11], errors='coerce')
+                            
+                            # 3. FILTRO MAESTRO: Si las 3 fechas son Nulas, la fila es basura
+                            mask_validos = ~(
+                                df_c['FEC_INGRESO'].isna() & 
+                                df_c['FEC_ULT_COMPRA'].isna() & 
+                                df_c['FEC_ULT_VENTA_INV'].isna()
+                            )
+                            df_c = df_c[mask_validos].copy()
+                            
+                            # Formateamos fechas a solo fecha (sin hora) después del filtro
+                            for col_fecha in ['FEC_INGRESO', 'FEC_ULT_COMPRA', 'FEC_ULT_VENTA_INV']:
+                                df_c[col_fecha] = df_c[col_fecha].dt.date
+
+                            # Etiquetas
                             df_c['SUCURSAL'] = sucursal
                             df_c['ALMACEN'] = almacen
                             
-                            inventarios_cargados.append(df_c)
-                            st.success(f"✅ {len(df_c)} regs.")
+                            if not df_c.empty:
+                                inventarios_cargados.append(df_c)
+                                st.success(f"✅ {len(df_c)} registros válidos (Filtrados por fecha).")
+                            else:
+                                st.warning("⚠️ Archivo leído, pero no se encontraron filas con fechas válidas.")
+                                
                         except Exception as e:
-                            st.error(f"❌ Error en {almacen}: Verifica estructura de columnas.")
+                            st.error(f"❌ Error en {almacen}. Verifica que el Excel tenga datos en las columnas A,B,E,I,J,K,L,N.")
 
     # ======================================================
     # 4. CONSOLIDACIÓN Y EXPORTACIÓN
@@ -137,25 +136,45 @@ def show():
                     df_catalogo = cargar_catalogo_blindado(file_cat)
                     if df_catalogo is not None:
                         df_final = pd.merge(df_final, df_catalogo, on='NP', how='left')
-                        if 'CATEGORIA' in df_final.columns:
-                            df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna("X DEFINIR")
-                        if 'LINEA' in df_final.columns:
-                            df_final['LINEA'] = df_final['LINEA'].fillna("X DEFINIR")
+                        
+                # 3. Rellenar vacíos de catálogo
+                if 'CATEGORIA' not in df_final.columns: df_final['CATEGORIA'] = "X DEFINIR"
+                if 'LINEA' not in df_final.columns: df_final['LINEA'] = "X DEFINIR"
                 
-                # 3. Limpieza final de Nulos
-                df_final['EXISTENCIA'] = df_final['EXISTENCIA'].fillna(0)
-                df_final['COSTO_UNITARIO'] = df_final['COSTO_UNITARIO'].fillna(0)
-                df_final['VALOR_INVENTARIO'] = df_final['EXISTENCIA'] * df_final['COSTO_UNITARIO']
+                df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna("X DEFINIR")
+                df_final['LINEA'] = df_final['LINEA'].fillna("X DEFINIR")
                 
-                # 4. Generar Excel
+                # 4. ORDEN FINAL DE COLUMNAS (El solicitado)
+                cols_orden = [
+                    "SUCURSAL", 
+                    "ALMACEN", 
+                    "NP", 
+                    "DESCRIPCION", 
+                    "LINEA", 
+                    "CATEGORIA", 
+                    "EXISTENCIA", 
+                    "COSTO_UNITARIO", 
+                    "VALOR TOTAL", 
+                    "FEC_INGRESO", 
+                    "FEC_ULT_COMPRA", 
+                    "FEC_ULT_VENTA_INV"
+                ]
+                
+                # Aseguramos que existan todas (por si el catálogo falló)
+                for c in cols_orden:
+                    if c not in df_final.columns: df_final[c] = ""
+                    
+                df_export = df_final[cols_orden]
+                
+                # 5. Generar Excel
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df_final.to_excel(writer, index=False, sheet_name='DATA_INVENTARIO')
+                    df_export.to_excel(writer, index=False, sheet_name='DATA_INVENTARIO')
                     
                 fecha_hoy = datetime.now().strftime('%Y-%m-%d')
                 nombre_archivo = f"INVENTARIO_CONSOLIDADO_{fecha_hoy}.xlsx"
                 
-                st.success(f"¡Listo! Archivo generado con {len(df_final)} registros.")
+                st.success(f"¡Listo! Archivo generado con {len(df_export)} registros limpios.")
                 st.warning("⚠️ Guarda este archivo en: BI_REFACCIONES_MASTER > DATA RESOURCES > DATA_INVENTARIO")
                 
                 st.download_button(
@@ -165,5 +184,5 @@ def show():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.error("No has cargado ningún inventario.")
+            st.error("No has cargado ningún inventario válido.")
             
