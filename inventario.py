@@ -91,7 +91,6 @@ def show():
                             df_c['VALOR TOTAL'] = pd.to_numeric(df_r.iloc[:, 13], errors='coerce').fillna(0) # Columna N
                             
                             # Fechas (La clave del filtro)
-                            # Usamos errors='coerce' para que si hay texto (encabezados) lo convierta en NaT (Nulo)
                             df_c['FEC_INGRESO'] = pd.to_datetime(df_r.iloc[:, 9], errors='coerce')
                             df_c['FEC_ULT_COMPRA'] = pd.to_datetime(df_r.iloc[:, 10], errors='coerce')
                             df_c['FEC_ULT_VENTA_INV'] = pd.to_datetime(df_r.iloc[:, 11], errors='coerce')
@@ -144,7 +143,7 @@ def show():
                 df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna("X DEFINIR")
                 df_final['LINEA'] = df_final['LINEA'].fillna("X DEFINIR")
                 
-                # 4. ORDEN FINAL DE COLUMNAS (El solicitado)
+                # 4. ORDEN FINAL DE COLUMNAS
                 cols_orden = [
                     "SUCURSAL", 
                     "ALMACEN", 
@@ -160,29 +159,27 @@ def show():
                     "FEC_ULT_VENTA_INV"
                 ]
                 
-                # Aseguramos que existan todas (por si el catálogo falló)
                 for c in cols_orden:
                     if c not in df_final.columns: df_final[c] = ""
                     
                 df_export = df_final[cols_orden]
                 
-                # 5. Generar Excel
+                # 5. Generar Excel (NOMBRE FIJO PARA REEMPLAZO EN DRIVE)
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_export.to_excel(writer, index=False, sheet_name='DATA_INVENTARIO')
-                    
-                fecha_hoy = datetime.now().strftime('%Y-%m-%d')
-                nombre_archivo = f"INVENTARIO_CONSOLIDADO_{fecha_hoy}.xlsx"
+                
+                # --- CAMBIO APLICADO: NOMBRE ESTÁTICO ---
+                nombre_archivo = "INVENTARIO_CRA.xlsx"
                 
                 st.success(f"¡Listo! Archivo generado con {len(df_export)} registros limpios.")
-                st.warning("⚠️ Guarda este archivo en: BI_REFACCIONES_MASTER > DATA RESOURCES > DATA_INVENTARIO")
+                st.warning("⚠️ Guarda este archivo reemplazando el existente en: BI_REFACCIONES_MASTER > DATA RESOURCES > DATA_INVENTARIO")
                 
                 st.download_button(
-                    label="📥 Descargar Excel Limpio",
+                    label="📥 Descargar INVENTARIO_CRA.xlsx",
                     data=buffer.getvalue(),
                     file_name=nombre_archivo,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
             st.error("No has cargado ningún inventario válido.")
-            
