@@ -10,7 +10,7 @@ def show():
     st.markdown("---")
 
     # ======================================================
-    # 1. CONFIGURACIÓN FIJA (Tus Sucursales y Almacenes)
+    # 1. CONFIGURACIÓN FIJA
     # ======================================================
     ALMACENES_POR_SUCURSAL = {
         "CUAUTITLAN": [
@@ -57,7 +57,7 @@ def show():
     inventarios_cargados = []
 
     st.markdown("### 📥 Carga de Inventarios por Agencia")
-    st.info("ℹ️ Nota: Carga los archivos en todas las pestañas necesarias y al final presiona el botón Generar.")
+    st.info("ℹ️ Nota: Carga los archivos en todas las pestañas y al final presiona Generar.")
     
     tabs = st.tabs(list(ALMACENES_POR_SUCURSAL.keys()))
 
@@ -74,11 +74,8 @@ def show():
                     
                     if f_inv:
                         try:
-                            # 1. LECTURA RAW (Sin encabezados)
+                            # 1. LECTURA RAW
                             df_r = pd.read_excel(f_inv, header=None)
-                            
-                            # 2. SELECCIÓN QUIRÚRGICA DE COLUMNAS (Indices base 0)
-                            # A=0, B=1, E=4, I=8, J=9, K=10, L=11, N=13
                             df_c = pd.DataFrame()
                             
                             # Datos Básicos
@@ -88,14 +85,15 @@ def show():
                             # Métricas
                             df_c['COSTO_UNITARIO'] = pd.to_numeric(df_r.iloc[:, 4], errors='coerce').fillna(0)
                             df_c['EXISTENCIA'] = pd.to_numeric(df_r.iloc[:, 8], errors='coerce').fillna(0)
-                            df_c['VALOR TOTAL'] = pd.to_numeric(df_r.iloc[:, 13], errors='coerce').fillna(0) # Columna N
+                            df_c['VALOR TOTAL'] = pd.to_numeric(df_r.iloc[:, 13], errors='coerce').fillna(0)
                             
-                            # Fechas (La clave del filtro)
-                            df_c['FEC_INGRESO'] = pd.to_datetime(df_r.iloc[:, 9], errors='coerce')
-                            df_c['FEC_ULT_COMPRA'] = pd.to_datetime(df_r.iloc[:, 10], errors='coerce')
-                            df_c['FEC_ULT_VENTA_INV'] = pd.to_datetime(df_r.iloc[:, 11], errors='coerce')
+                            # --- CORRECCIÓN DE FECHAS (dayfirst=True) ---
+                            # Esto es clave: le dice a Python que el primer número es el DÍA
+                            df_c['FEC_INGRESO'] = pd.to_datetime(df_r.iloc[:, 9], errors='coerce', dayfirst=True)
+                            df_c['FEC_ULT_COMPRA'] = pd.to_datetime(df_r.iloc[:, 10], errors='coerce', dayfirst=True)
+                            df_c['FEC_ULT_VENTA_INV'] = pd.to_datetime(df_r.iloc[:, 11], errors='coerce', dayfirst=True)
                             
-                            # 3. FILTRO MAESTRO: Si las 3 fechas son Nulas, la fila es basura
+                            # Filtro de validez
                             mask_validos = ~(
                                 df_c['FEC_INGRESO'].isna() & 
                                 df_c['FEC_ULT_COMPRA'].isna() & 
@@ -103,7 +101,7 @@ def show():
                             )
                             df_c = df_c[mask_validos].copy()
                             
-                            # Formateamos fechas a solo fecha (sin hora) después del filtro
+                            # Quitamos la hora para dejar fecha limpia
                             for col_fecha in ['FEC_INGRESO', 'FEC_ULT_COMPRA', 'FEC_ULT_VENTA_INV']:
                                 df_c[col_fecha] = df_c[col_fecha].dt.date
 
@@ -113,50 +111,36 @@ def show():
                             
                             if not df_c.empty:
                                 inventarios_cargados.append(df_c)
-                                st.success(f"✅ {len(df_c)} registros válidos (Filtrados por fecha).")
+                                st.success(f"✅ {len(df_c)} regs.")
                             else:
-                                st.warning("⚠️ Archivo leído, pero no se encontraron filas con fechas válidas.")
+                                st.warning("⚠️ Sin datos válidos.")
                                 
                         except Exception as e:
-                            st.error(f"❌ Error en {almacen}. Verifica que el Excel tenga datos en las columnas A,B,E,I,J,K,L,N.")
+                            st.error(f"❌ Error en {almacen}: {e}")
 
     # ======================================================
-    # 4. CONSOLIDACIÓN Y EXPORTACIÓN
+    # 4. EXPORTACIÓN
     # ======================================================
     st.markdown("---")
-    if st.button("💾 GENERAR ARCHIVO LIMPIO PARA POWER BI", type="primary", use_container_width=True):
+    if st.button("💾 GENERAR ARCHIVO CORREGIDO", type="primary", use_container_width=True):
         if inventarios_cargados:
-            with st.spinner("Unificando formatos y cruzando catálogo..."):
-                # 1. Unir todo
+            with st.spinner("Procesando fechas correctamente..."):
                 df_final = pd.concat(inventarios_cargados, ignore_index=True)
                 
-                # 2. Pegar Catálogo (si se subió)
                 if file_cat:
                     df_catalogo = cargar_catalogo_blindado(file_cat)
                     if df_catalogo is not None:
                         df_final = pd.merge(df_final, df_catalogo, on='NP', how='left')
                         
-                # 3. Rellenar vacíos de catálogo
                 if 'CATEGORIA' not in df_final.columns: df_final['CATEGORIA'] = "X DEFINIR"
                 if 'LINEA' not in df_final.columns: df_final['LINEA'] = "X DEFINIR"
-                
                 df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna("X DEFINIR")
                 df_final['LINEA'] = df_final['LINEA'].fillna("X DEFINIR")
                 
-                # 4. ORDEN FINAL DE COLUMNAS
                 cols_orden = [
-                    "SUCURSAL", 
-                    "ALMACEN", 
-                    "NP", 
-                    "DESCRIPCION", 
-                    "LINEA", 
-                    "CATEGORIA", 
-                    "EXISTENCIA", 
-                    "COSTO_UNITARIO", 
-                    "VALOR TOTAL", 
-                    "FEC_INGRESO", 
-                    "FEC_ULT_COMPRA", 
-                    "FEC_ULT_VENTA_INV"
+                    "SUCURSAL", "ALMACEN", "NP", "DESCRIPCION", "LINEA", "CATEGORIA", 
+                    "EXISTENCIA", "COSTO_UNITARIO", "VALOR TOTAL", 
+                    "FEC_INGRESO", "FEC_ULT_COMPRA", "FEC_ULT_VENTA_INV"
                 ]
                 
                 for c in cols_orden:
@@ -164,17 +148,20 @@ def show():
                     
                 df_export = df_final[cols_orden]
                 
-                # 5. Generar Excel (NOMBRE FIJO PARA REEMPLAZO EN DRIVE)
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_export.to_excel(writer, index=False, sheet_name='DATA_INVENTARIO')
-                
-                # --- CAMBIO APLICADO: NOMBRE ESTÁTICO ---
+                    
+                    # Formato visual dd/mm/yyyy en Excel para que TÚ lo veas bien
+                    # Power BI leerá el dato correcto por debajo
+                    workbook = writer.book
+                    worksheet = writer.sheets['DATA_INVENTARIO']
+                    formato_fecha = workbook.add_format({'num_format': 'dd/mm/yyyy'})
+                    worksheet.set_column('J:L', 12, formato_fecha)
+                    worksheet.set_column('A:D', 15)
+
                 nombre_archivo = "INVENTARIO_CRA.xlsx"
-                
-                st.success(f"¡Listo! Archivo generado con {len(df_export)} registros limpios.")
-                st.warning("⚠️ Guarda este archivo reemplazando el existente en: BI_REFACCIONES_MASTER > DATA RESOURCES > DATA_INVENTARIO")
-                
+                st.success(f"¡Listo! Fechas corregidas (Día/Mes).")
                 st.download_button(
                     label="📥 Descargar INVENTARIO_CRA.xlsx",
                     data=buffer.getvalue(),
@@ -182,4 +169,4 @@ def show():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.error("No has cargado ningún inventario válido.")
+            st.error("No hay datos.")
