@@ -13,9 +13,11 @@ if 'authenticated' not in st.session_state:
 if 'usuario_activo' not in st.session_state:
     st.session_state['usuario_activo'] = ""
 
+# 1. Agregamos a Ivonne a las credenciales
 CREDENTIALS = {
     "Manuel Salas": "Salas1234",
-    "Eduardo Barrera": "Barrera1234"
+    "Eduardo Barrera": "Barrera1234",
+    "Ivonne Ascencio": "Ascencio123."
 }
 
 def check_login(user, password):
@@ -41,11 +43,20 @@ if not st.session_state['authenticated']:
 # ==========================
 with st.sidebar:
     st.title("🗂️ Menú Principal")
-    st.write(f"Hola, **{st.session_state['usuario_activo']}**")
+    usuario = st.session_state['usuario_activo']
+    st.write(f"Hola, **{usuario}**")
+    
+    # 2. Lógica de permisos por usuario
+    if usuario == "Ivonne Ascencio":
+        # Ivonne solo ve Inventario
+        opciones_disponibles = ["Generador Base Almacen"]
+    else:
+        # Los demás (Manuel y Eduardo) ven todo
+        opciones_disponibles = ["Generador Base Ventas", "Generador Base Almacen"]
     
     opcion = st.radio(
         "Selecciona Herramienta:",
-        ["Generador Base Ventas", "Generador Base Almacen"]
+        opciones_disponibles
     )
     
     st.markdown("---")
@@ -57,7 +68,7 @@ with st.sidebar:
 # 🚀 CONTROLADOR DE VISTAS
 # ==========================
 if opcion == "Generador Base Ventas":
-    ventas.show()  # Llamamos a la función show() dentro de ventas.py
+    ventas.show()  
 
 elif opcion == "Generador Base Almacen":
-    inventario.show() # Llamamos a la función show() dentro de inventario.py
+    inventario.show()
