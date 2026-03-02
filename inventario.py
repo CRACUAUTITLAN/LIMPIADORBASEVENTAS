@@ -12,12 +12,12 @@ def show():
     # ======================================================
     # 1. CONFIGURACIÓN FIJA
     # ======================================================
-    ALMACENES_POR_SUCURSAL = {
+ALMACENES_POR_SUCURSAL = {
         "CUAUTITLAN": [
             "ALM. GENERAL", "ALM. LIPU", "ALM. MYM", "Alm. Utep", "ALM. FAST FOOD", "ALM. BOÑAR"
         ],
         "TULTITLAN": [
-            "ALM. GENERAL", "TUMSA", "BISONTE TEPOTZOTLAN", "TEISA", "CULVERT", "TDR", "ALMACEN AFN", "ZONTE"
+            "ALM. GENERAL", "TUMSA", "BISONTE TEPOTZOTLAN", "TEISA", "CULVERT", "TDR", "ALMACEN AFN", "ZONTE", "ALM. ENLACES LOGISTICOS"
         ],
         "BAJIO": [
             "ALM. UTEP SAN LUIS", "BISONTE SLP"
