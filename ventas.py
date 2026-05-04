@@ -13,8 +13,6 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP
 # ======================================================
 getcontext().prec = 12
 
-# NOTA: Eliminamos st.set_page_config y el Login porque ahora viven en app.py
-
 # ======================================================
 # 1. FUNCIONES AUXILIARES (LÓGICA PURA)
 # ======================================================
@@ -217,20 +215,18 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
     return df
 
 # ======================================================
-# 2. FUNCIÓN PRINCIPAL DE VISTA (AQUÍ ESTÁ LA MAGIA)
+# 2. FUNCIÓN PRINCIPAL DE VISTA
 # ======================================================
 def show():
     st.header("🏭 Generador Base Ventas (BPro)")
     st.markdown("---")
 
-    # Gestión de estado para el botón de limpiar
     if 'id_limpieza' not in st.session_state:
         st.session_state['id_limpieza'] = 0
 
     def reset_all():
         st.session_state['id_limpieza'] += 1
 
-    # --- INTERFAZ DE CONFIGURACIÓN ---
     st.markdown("### 1. Configuración General")
     col_conf1, col_conf2, col_conf3 = st.columns([1, 1, 1])
 
@@ -249,7 +245,6 @@ def show():
     st.info("💡 Modo Turbo: Estrategia de asignación prioritaria por monto menor activada.")
     st.markdown("---")
 
-    # --- CARGA DE ARCHIVOS ---
     uid = st.session_state['id_limpieza']
     st.markdown("### 2. Carga de Archivos")
 
@@ -258,7 +253,6 @@ def show():
     with col2: file_vend = st.file_uploader("2. Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
     with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
 
-    # --- BOTÓN DE EJECUCIÓN ---
     if st.button("🚀 GENERAR BASE MAESTRA"):
         if not (file_bpro and file_vend and file_cat):
             st.warning("⚠️ Sube los 3 archivos.")
@@ -281,30 +275,15 @@ def show():
                     
                     prog_bar.progress(80, text="📚 Cruzando Catálogo...")
                     
-                    # ==============================================================================
-                    # 🛑 ZONA DE SEGURIDAD BLINDADA (ANTIDUPLICADOS) 🛑
-                    # ==============================================================================
-                    
-                    # 1. CARGA SEGURA DEL CATÁLOGO
                     df_cat = pd.read_excel(file_cat)
-                    
-                    # Convertimos NP a Texto + Quitamos espacios + Borramos Duplicados en Catálogo
                     df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
                     df_cat = df_cat.drop_duplicates(subset=['NP'], keep='first')
                     
-                    # 2. LIMPIEZA DE LA BASE BPRO
-                    # Convertimos NP a Texto para que coincida con el catálogo
                     df["NP"] = df["NP"].astype(str).str.strip()
-                    
-                    # Borramos filas EXACTAMENTE idénticas en BPro (fantasmas o errores de carga)
                     df = df.drop_duplicates()
                     
-                    # ==============================================================================
-                    
-                    # 3. CRUCE SEGURO 1 a 1
                     df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
                     
-                    # POST-PROCESAMIENTO
                     mask_nocat = df_final['CATEGORIA'].isna()
                     df_final.loc[mask_nocat, 'DESCR'] = 'X DEFINIR'
                     df_final['CATEGORIA'] = df_final['CATEGORIA'].fillna('X DEFINIR')
@@ -327,33 +306,7 @@ def show():
                     
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
-                    # ==============================================================================
-                    #  🕵️‍♂️ LÓGICA DE REASIGNACIÓN BAJIO
-                    # ==============================================================================
-                    prog_bar.progress(95, text="🌵 Verificando asignaciones de BAJIO...")
-
-                    BAJIO_VENDEDORES = [
-                        "DANIELA OLGUIN MARTINEZ",
-                        "JUAN PABLO RODRIGUEZ LOREDO",
-                        "PAULINO SANCHEZ MENDEZ"
-                    ]
-
-                    BAJIO_ALMACENES = [
-                        "ALM. UTEP SAN LUIS",
-                        "BISONTE SLP"
-                    ]
-
-                    vendedor_check = df_final["VENDEDOR"].astype(str).str.strip().str.upper()
-                    almacen_check = df_final["ALMACEN"].astype(str).str.strip().str.upper()
-
-                    mask_bajio = (vendedor_check.isin(BAJIO_VENDEDORES)) | (almacen_check.isin(BAJIO_ALMACENES))
-
-                    cantidad_bajio = mask_bajio.sum()
-                    if cantidad_bajio > 0:
-                        df_final.loc[mask_bajio, "SUCURSAL"] = "BAJIO"
-                        st.toast(f"✅ Se detectaron {cantidad_bajio} registros de BAJIO y se actualizó su sucursal.", icon="🌵")
-
-                    # ==============================================================================
+                    # Se ha eliminado la reasignación automática de BAJIO para respetar la sucursal seleccionada.
                     
                     cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
                     for c in cols_fin:
