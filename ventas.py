@@ -13,8 +13,6 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP
 # ======================================================
 getcontext().prec = 12
 
-# NOTA: Eliminamos st.set_page_config y el Login porque ahora viven en app.py
-
 # ======================================================
 # 1. FUNCIONES AUXILIARES (LÓGICA PURA)
 # ======================================================
@@ -217,13 +215,12 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
     return df
 
 # ======================================================
-# 2. FUNCIÓN PRINCIPAL DE VISTA (AQUÍ ESTÁ LA MAGIA)
+# 2. FUNCIÓN PRINCIPAL DE VISTA
 # ======================================================
 def show():
     st.header("🏭 Generador Base Ventas (BPro)")
     st.markdown("---")
 
-    # Gestión de estado para el botón de limpiar
     if 'id_limpieza' not in st.session_state:
         st.session_state['id_limpieza'] = 0
 
@@ -232,36 +229,55 @@ def show():
 
     # --- INTERFAZ DE CONFIGURACIÓN ---
     st.markdown("### 1. Configuración General")
-    col_conf1, col_conf2, col_conf3 = st.columns([1, 1, 1])
+    
+    # 🌟 NUEVO ORDEN: SUCURSAL | MES | AÑO | BOTÓN LIMPIAR
+    col_conf1, col_conf2, col_conf3, col_conf4 = st.columns(4)
 
     with col_conf1:
         sucursal = st.selectbox("🏢 Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
 
     with col_conf2:
+        lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+        mes_trabajo = st.selectbox("📆 Mes de Trabajo:", lista_meses)
+
+    with col_conf3:
         anio_actual_sistema = str(datetime.now().year)
         anio_texto = st.text_input("📅 Año de Trabajo:", value=anio_actual_sistema)
 
-    with col_conf3:
+    with col_conf4:
         st.write("") 
         st.write("") 
         st.button("🗑️ LIMPIAR / NUEVA BASE", on_click=reset_all, type="primary", use_container_width=True)
 
-    st.info("💡 Modo Turbo: Estrategia de asignación prioritaria por monto menor activada.")
+    st.info(f"💡 Modo Turbo Activado. Procesando afectaciones exclusivas para el mes de: **{mes_trabajo}**")
     st.markdown("---")
 
-    # --- CARGA DE ARCHIVOS ---
+    # --- CARGA DE ARCHIVOS DINÁMICA ---
     uid = st.session_state['id_limpieza']
     st.markdown("### 2. Carga de Archivos")
 
-    col1, col2, col3 = st.columns(3)
-    with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls"], key=f"b_{uid}")
-    with col2: file_vend = st.file_uploader("2. Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
-    with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
+    file_acumulada = None
+    
+    # 🌟 LÓGICA DE INTERFAZ POR MES:
+    if mes_trabajo == "ENERO":
+        col1, col2, col3 = st.columns(3)
+        with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls", "xlsx"], key=f"b_{uid}")
+        with col2: file_vend = st.file_uploader("2. Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
+        with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
+    else:
+        col0, col1, col2, col3 = st.columns(4)
+        with col0: file_acumulada = st.file_uploader("0. Base Acumulada (.xlsx)", type=["xlsx", "xls"], key=f"a_{uid}")
+        with col1: file_bpro = st.file_uploader("1. BPro Nuevo (.xls)", type=["xls", "xlsx"], key=f"b_{uid}")
+        with col2: file_vend = st.file_uploader("2. Vend. Nuevo (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
+        with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
 
     # --- BOTÓN DE EJECUCIÓN ---
     if st.button("🚀 GENERAR BASE MAESTRA"):
+        # 🌟 VALIDACIONES ANTES DE ARRANCAR
         if not (file_bpro and file_vend and file_cat):
-            st.warning("⚠️ Sube los 3 archivos.")
+            st.warning("⚠️ Sube los archivos requeridos (BPro, Vendedores, Catálogo).")
+        elif mes_trabajo != "ENERO" and not file_acumulada:
+            st.warning(f"⚠️ Has seleccionado el mes de {mes_trabajo}. Es OBLIGATORIO subir tu 'Base Acumulada' en la primera casilla.")
         else:
             prog_bar = st.progress(0, text="Iniciando...")
             try:
@@ -281,25 +297,14 @@ def show():
                     
                     prog_bar.progress(80, text="📚 Cruzando Catálogo...")
                     
-                    # ==============================================================================
-                    # 🛑 ZONA DE SEGURIDAD BLINDADA (ANTIDUPLICADOS) 🛑
-                    # ==============================================================================
-                    
                     # 1. CARGA SEGURA DEL CATÁLOGO
                     df_cat = pd.read_excel(file_cat)
-                    
-                    # Convertimos NP a Texto + Quitamos espacios + Borramos Duplicados en Catálogo
                     df_cat["NP"] = df_cat["NP"].astype(str).str.strip()
                     df_cat = df_cat.drop_duplicates(subset=['NP'], keep='first')
                     
                     # 2. LIMPIEZA DE LA BASE BPRO
-                    # Convertimos NP a Texto para que coincida con el catálogo
                     df["NP"] = df["NP"].astype(str).str.strip()
-                    
-                    # Borramos filas EXACTAMENTE idénticas en BPro (fantasmas o errores de carga)
                     df = df.drop_duplicates()
-                    
-                    # ==============================================================================
                     
                     # 3. CRUCE SEGURO 1 a 1
                     df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
@@ -325,6 +330,25 @@ def show():
                     df_final["mes"] = df_final["FECHA_DT"].apply(get_mes_espanol)
                     df_final["FECHA"] = df_final["FECHA_DT"].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "Sin Fecha")
                     
+                    # ==============================================================================
+                    # 🌟 LÓGICA DE INTEGRACIÓN MENSUAL (BASE ACUMULADA)
+                    # ==============================================================================
+                    if mes_trabajo != "ENERO":
+                        prog_bar.progress(90, text=f"🔄 Integrando con Acumulado (Sobrescribiendo {mes_trabajo})...")
+                        df_acum = pd.read_excel(file_acumulada)
+                        
+                        # 🛡️ REGLA DE ORO: Borramos cualquier registro viejo del mes actual en la base histórica
+                        # Esto asegura que si reprocesas Febrero, no se dupliquen las facturas.
+                        df_acum = df_acum[df_acum["mes"] != mes_trabajo]
+                        
+                        # Concatenamos la historia (Enero...) con lo limpio del mes actual
+                        df_final = pd.concat([df_acum, df_final], ignore_index=True)
+
+                        # Reconfigurar FECHA_DT ya que df_acum no la trae viva y ordenar todo de nuevo
+                        df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
+                    # ==============================================================================
+
+                    # ORDEN FINAL Y LIMPIEZA DE COLUMNAS
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
                     cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
@@ -336,17 +360,17 @@ def show():
                     time.sleep(0.5)
                     prog_bar.empty()
                     
-                    st.success(f"¡Base generada con éxito! ({len(df_final)} registros)")
-                    st.dataframe(df_final.head(10)) 
+                    st.success(f"¡Base de {mes_trabajo} generada e integrada con éxito! (Total: {len(df_final)} registros)")
+                    st.dataframe(df_final.tail(10)) # Mostramos la "cola" para ver los más recientes
                     
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
+                    nombre_archivo = f"{sucursal}_Ventas_Acumuladas_{mes_trabajo}_{anio_texto}_MASTER.xlsx"
                     
                     st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
                                          file_name=nombre_archivo,
                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error procesando la información: {e}")
