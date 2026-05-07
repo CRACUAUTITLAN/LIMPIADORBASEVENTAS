@@ -230,7 +230,6 @@ def show():
     # --- INTERFAZ DE CONFIGURACIÓN ---
     st.markdown("### 1. Configuración General")
     
-    # 🌟 NUEVO ORDEN: SUCURSAL | MES | AÑO | BOTÓN LIMPIAR
     col_conf1, col_conf2, col_conf3, col_conf4 = st.columns(4)
 
     with col_conf1:
@@ -238,9 +237,16 @@ def show():
 
     with col_conf2:
         lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
-        mes_trabajo = st.selectbox("📆 Mes de Trabajo:", lista_meses)
+        
+        # 🧠 LÓGICA INTELIGENTE: Obtenemos el mes actual del sistema (1 al 12)
+        # Le restamos 1 porque las listas en Python empiezan en 0 (Enero = 0, Febrero = 1, etc.)
+        mes_actual_idx = datetime.now().month - 1
+        
+        # Le pasamos ese índice al selectbox para que lo seleccione automáticamente
+        mes_trabajo = st.selectbox("📆 Mes de Trabajo:", lista_meses, index=mes_actual_idx)
 
     with col_conf3:
+        # Ya tomaba el año automático, se mantiene igual
         anio_actual_sistema = str(datetime.now().year)
         anio_texto = st.text_input("📅 Año de Trabajo:", value=anio_actual_sistema)
 
@@ -338,10 +344,9 @@ def show():
                         df_acum = pd.read_excel(file_acumulada)
                         
                         # 🛡️ REGLA DE ORO: Borramos cualquier registro viejo del mes actual en la base histórica
-                        # Esto asegura que si reprocesas Febrero, no se dupliquen las facturas.
                         df_acum = df_acum[df_acum["mes"] != mes_trabajo]
                         
-                        # Concatenamos la historia (Enero...) con lo limpio del mes actual
+                        # Concatenamos la historia con lo limpio del mes actual
                         df_final = pd.concat([df_acum, df_final], ignore_index=True)
 
                         # Reconfigurar FECHA_DT ya que df_acum no la trae viva y ordenar todo de nuevo
@@ -361,7 +366,7 @@ def show():
                     prog_bar.empty()
                     
                     st.success(f"¡Base de {mes_trabajo} generada e integrada con éxito! (Total: {len(df_final)} registros)")
-                    st.dataframe(df_final.tail(10)) # Mostramos la "cola" para ver los más recientes
+                    st.dataframe(df_final.tail(10)) 
                     
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
