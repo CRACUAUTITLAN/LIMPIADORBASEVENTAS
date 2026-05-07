@@ -239,14 +239,14 @@ def show():
         lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
         
         # 🧠 LÓGICA INTELIGENTE: Obtenemos el mes actual del sistema (1 al 12)
-        # Le restamos 1 porque las listas en Python empiezan en 0 (Enero = 0, Febrero = 1, etc.)
+        # Le restamos 1 porque las listas en Python empiezan en 0
         mes_actual_idx = datetime.now().month - 1
         
         # Le pasamos ese índice al selectbox para que lo seleccione automáticamente
         mes_trabajo = st.selectbox("📆 Mes de Trabajo:", lista_meses, index=mes_actual_idx)
 
     with col_conf3:
-        # Ya tomaba el año automático, se mantiene igual
+        # Ya tomaba el año automático
         anio_actual_sistema = str(datetime.now().year)
         anio_texto = st.text_input("📅 Año de Trabajo:", value=anio_actual_sistema)
 
@@ -372,7 +372,8 @@ def show():
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    nombre_archivo = f"{sucursal}_Ventas_Acumuladas_{mes_trabajo}_{anio_texto}_MASTER.xlsx"
+                    # 🌟 AQUÍ ESTÁ EL CAMBIO: Nombre original restaurado
+                    nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                     
                     st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
                                          file_name=nombre_archivo,
