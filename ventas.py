@@ -148,65 +148,44 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# MOTOR EXACTO — Aritmética en centavos + Meet-in-the-Middle
+# MOTOR DE ASIGNACIÓN — Rápido + Exacto en Centavos
 # ======================================================
 
 def decimal_to_cents(d: Decimal) -> int:
     """Convierte Decimal a centavos enteros. Elimina TODO error de punto flotante."""
     return int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
-def meet_in_middle_exact(items: list, target_cents: int):
+def subset_sum_exact(items: list, target_cents: int):
     """
-    Subset sum EXACTO usando Meet-in-the-Middle.
-    Resuelve en O(2^(n/2)) en lugar de O(2^n).
-    Para 40 items: 2^20 = ~1M operaciones (instantáneo).
-    Para 50 items: 2^25 = ~33M operaciones (segundos).
+    Motor RÁPIDO (itertools con profundidad limitada) + aritmética EXACTA en centavos.
+    Sin tolerancias. Sin aproximaciones.
 
     items        : lista de {"idx": int, "val_cents": int}
     target_cents : objetivo en centavos (entero puro)
-    Retorna      : lista de idx que forman el subset exacto, o None si imposible.
+    Retorna      : lista de idx que forman el subset exacto, o None si no encuentra.
     """
-    n = len(items)
-
-    # --- Casos base ---
-    if n == 0:
-        return [] if target_cents == 0 else None
-    if target_cents < 0:
-        return None
-    total = sum(x["val_cents"] for x in items)
-    if target_cents > total:
-        return None
-    if target_cents == total:
-        return [x["idx"] for x in items]
+    # Casos base instantáneos
     if target_cents == 0:
         return []
+    total = sum(x["val_cents"] for x in items)
+    if target_cents == total:
+        return [x["idx"] for x in items]
+    if target_cents > total or target_cents < 0:
+        return None
 
-    # --- Dividir en dos mitades ---
-    mid   = n // 2
-    left  = items[:mid]
-    right = items[mid:]
+    # Solo items que individualmente no superan el objetivo
+    items_validos = [x for x in items if x["val_cents"] <= target_cents]
+    items_sorted  = sorted(items_validos, key=lambda x: x["val_cents"], reverse=True)
 
-    # --- Construir mapa del lado derecho: suma_centavos → posiciones usadas ---
-    right_map = {}
-    for r in range(len(right) + 1):
-        for combo in itertools.combinations(range(len(right)), r):
-            s = sum(right[i]["val_cents"] for i in combo)
-            if s not in right_map:
-                right_map[s] = combo
+    max_depth = min(len(items_sorted), 12)
 
-    # --- Buscar en lado izquierdo y cruzar con derecho ---
-    for r in range(len(left) + 1):
-        for combo_left in itertools.combinations(range(len(left)), r):
-            s_left = sum(left[i]["val_cents"] for i in combo_left)
-            needed = target_cents - s_left
-            if needed in right_map:
-                combo_right = right_map[needed]
-                return (
-                    [left[i]["idx"]  for i in combo_left] +
-                    [right[i]["idx"] for i in combo_right]
-                )
+    for r in range(1, max_depth + 1):
+        for combo in itertools.combinations(items_sorted, r):
+            if sum(x["val_cents"] for x in combo) == target_cents:
+                return [x["idx"] for x in combo]
 
     return None
+
 
 def apply_vendor_logic_fast(df, mapa_vendedores):
     df["VENDEDOR"] = "Sin Vendedor"
@@ -243,20 +222,19 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
         total_items_cents = sum(x["val_cents"] for x in items)
 
         # ============================================================
-        # CASO EXACTO: 2 vendedores
+        # CASO 2 VENDEDORES — Bidireccional exacto
         # ============================================================
         if len(metas) == 2:
             meta_a_cents = decimal_to_cents(metas[0]["META"])
             meta_b_cents = decimal_to_cents(metas[1]["META"])
 
-            # Verificación de consistencia de datos
+            # Verificación de consistencia de datos fuente
             diferencia = abs(total_items_cents - meta_a_cents - meta_b_cents)
-
             if diferencia > 2:
                 facturas_error.append({
-                    "FACTURA"  : factura,
-                    "PROBLEMA" : "inconsistencia_en_datos",
-                    "DETALLE"  : (
+                    "FACTURA" : factura,
+                    "PROBLEMA": "inconsistencia_en_datos",
+                    "DETALLE" : (
                         f"Items suman ${total_items_cents/100:.2f} | "
                         f"Metas suman ${(meta_a_cents + meta_b_cents)/100:.2f} | "
                         f"Diferencia: ${diferencia/100:.2f}"
@@ -266,8 +244,8 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
                 df.loc[indices, "VENDEDOR"] = ganador
                 continue
 
-            # Búsqueda exacta
-            solucion = meet_in_middle_exact(items, meta_a_cents)
+            # Intenta primero desde el lado de A
+            solucion = subset_sum_exact(items, meta_a_cents)
 
             if solucion is not None:
                 sol_set = set(solucion)
@@ -276,30 +254,44 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
                         metas[0]["VENDEDOR"] if item["idx"] in sol_set
                         else metas[1]["VENDEDOR"]
                     )
-            else:
-                facturas_error.append({
-                    "FACTURA"  : factura,
-                    "PROBLEMA" : "sin_particion_exacta",
-                    "DETALLE"  : (
-                        f"Montos consistentes pero ninguna combinación de items "
-                        f"produce exactamente ${meta_a_cents/100:.2f} "
-                        f"para {metas[0]['VENDEDOR']}"
+                continue
+
+            # Si falla desde A, intenta desde el lado de B
+            solucion_b = subset_sum_exact(items, meta_b_cents)
+            if solucion_b is not None:
+                sol_set_b = set(solucion_b)
+                for item in items:
+                    df.at[item["idx"], "VENDEDOR"] = (
+                        metas[1]["VENDEDOR"] if item["idx"] in sol_set_b
+                        else metas[0]["VENDEDOR"]
                     )
-                })
-                ganador = max(metas, key=lambda x: x["META"])["VENDEDOR"]
-                df.loc[indices, "VENDEDOR"] = ganador
+                continue
+
+            # Ninguna dirección funcionó — registrar para revisión manual
+            facturas_error.append({
+                "FACTURA" : factura,
+                "PROBLEMA": "sin_particion_exacta",
+                "DETALLE" : (
+                    f"Montos consistentes pero sin combinación exacta en "
+                    f"profundidad 12. {metas[0]['VENDEDOR']}: "
+                    f"${meta_a_cents/100:.2f} | {metas[1]['VENDEDOR']}: "
+                    f"${meta_b_cents/100:.2f}"
+                )
+            })
+            ganador = max(metas, key=lambda x: x["META"])["VENDEDOR"]
+            df.loc[indices, "VENDEDOR"] = ganador
             continue
 
         # ============================================================
-        # CASO GENERAL: 3+ vendedores (exacto iterativo)
+        # CASO 3+ VENDEDORES — Exacto iterativo
         # ============================================================
-        usados = set()
+        usados    = set()
         metas_ord = sorted(metas, key=lambda x: abs(x["META"]))
 
         for meta_actual in metas_ord[:-1]:
             objetivo_cents = decimal_to_cents(meta_actual["META"])
             pool     = [x for x in items if x["idx"] not in usados]
-            solucion = meet_in_middle_exact(pool, objetivo_cents)
+            solucion = subset_sum_exact(pool, objetivo_cents)
 
             if solucion is not None:
                 for idx in solucion:
@@ -312,6 +304,7 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
             df.loc[indices_restantes, "VENDEDOR"] = vendedor_mayor
 
     return df, facturas_error
+
 
 # ======================================================
 # 2. FUNCIÓN PRINCIPAL DE VISTA
@@ -335,7 +328,8 @@ def show():
         sucursal = st.selectbox("🏢 Sucursal:", ["TULTITLAN", "CUAUTITLAN"])
 
     with col_conf2:
-        lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+        lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
+                       "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
         mes_actual_idx = datetime.now().month - 1
         mes_trabajo = st.selectbox("📆 Mes de Trabajo:", lista_meses, index=mes_actual_idx)
 
@@ -361,13 +355,13 @@ def show():
         col1, col2, col3 = st.columns(3)
         with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls", "xlsx"], key=f"b_{uid}")
         with col2: file_vend = st.file_uploader("2. Vendedores (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
-        with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
+        with col3: file_cat  = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
     else:
         col0, col1, col2, col3 = st.columns(4)
         with col0: file_acumulada = st.file_uploader("0. Base Acumulada (.xlsx)", type=["xlsx", "xls"], key=f"a_{uid}")
         with col1: file_bpro = st.file_uploader("1. BPro Nuevo (.xls)", type=["xls", "xlsx"], key=f"b_{uid}")
         with col2: file_vend = st.file_uploader("2. Vend. Nuevo (.xls/x)", type=["xls", "xlsx"], key=f"v_{uid}")
-        with col3: file_cat = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
+        with col3: file_cat  = st.file_uploader("3. Catálogo (.xlsx)", type=["xlsx", "xls"], key=f"c_{uid}")
 
     # --- BOTÓN DE EJECUCIÓN ---
     if st.button("🚀 GENERAR BASE MAESTRA"):
@@ -395,7 +389,7 @@ def show():
                     # Mostrar reporte de errores si existen
                     if errores_vendedor:
                         df_err = pd.DataFrame(errores_vendedor)
-                        st.warning(f"⚠️ {len(errores_vendedor)} factura(s) con datos inconsistentes entre Vendedores y BPro:")
+                        st.warning(f"⚠️ {len(errores_vendedor)} factura(s) requieren revisión manual:")
                         st.dataframe(df_err, use_container_width=True)
 
                     prog_bar.progress(80, text="📚 Cruzando Catálogo...")
@@ -447,7 +441,10 @@ def show():
                     # ORDEN FINAL Y LIMPIEZA DE COLUMNAS
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
 
-                    cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR", "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN", "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL", "IVA", "VENTA TOTAL", "UTILIDAD"]
+                    cols_fin = ["SUCURSAL", "CLIENTE", "FACTURA", "VENDEDOR", "NP", "DESCR",
+                                "CATEGORIA", "LINEA", "FECHA", "año", "mes", "TIPO", "ALMACEN",
+                                "CANTIDAD", "COSTO", "PRECIO", "COSTO DE VENTA", "VENTA SUBTOTAL",
+                                "IVA", "VENTA TOTAL", "UTILIDAD"]
                     for c in cols_fin:
                         if c not in df_final.columns: df_final[c] = 0
                     df_final = df_final[cols_fin]
