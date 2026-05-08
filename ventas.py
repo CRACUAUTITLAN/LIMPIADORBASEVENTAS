@@ -13,6 +13,10 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP
 # ======================================================
 getcontext().prec = 12
 
+# Nombres exactos de los dos vendedores especiales
+VENDEDOR_A = "HUGO JORGE CORTES RAMIREZ"
+VENDEDOR_B = "ALEJANDRO JIMENEZ HERNANDEZ"
+
 # ======================================================
 # 1. FUNCIONES AUXILIARES (LÓGICA PURA)
 # ======================================================
@@ -148,7 +152,7 @@ def process_main_bpro(uploaded_file):
     return pd.DataFrame(rows)
 
 # ======================================================
-# MOTOR DE ASIGNACIÓN — Rápido + Exacto en Centavos
+# MOTOR DE ASIGNACIÓN
 # ======================================================
 
 def decimal_to_cents(d: Decimal) -> int:
@@ -157,14 +161,13 @@ def decimal_to_cents(d: Decimal) -> int:
 
 def subset_sum_exact(items: list, target_cents: int):
     """
-    Motor RÁPIDO (itertools con profundidad limitada) + aritmética EXACTA en centavos.
-    Sin tolerancias. Sin aproximaciones.
+    Motor exacto en centavos con profundidad limitada a 12.
+    Solo se usa para Hugo y Alejandro.
 
     items        : lista de {"idx": int, "val_cents": int}
     target_cents : objetivo en centavos (entero puro)
     Retorna      : lista de idx que forman el subset exacto, o None si no encuentra.
     """
-    # Casos base instantáneos
     if target_cents == 0:
         return []
     total = sum(x["val_cents"] for x in items)
@@ -173,11 +176,9 @@ def subset_sum_exact(items: list, target_cents: int):
     if target_cents > total or target_cents < 0:
         return None
 
-    # Solo items que individualmente no superan el objetivo
     items_validos = [x for x in items if x["val_cents"] <= target_cents]
     items_sorted  = sorted(items_validos, key=lambda x: x["val_cents"], reverse=True)
-
-    max_depth = min(len(items_sorted), 12)
+    max_depth     = min(len(items_sorted), 12)
 
     for r in range(1, max_depth + 1):
         for combo in itertools.combinations(items_sorted, r):
@@ -212,7 +213,7 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
             df.loc[indices, "VENDEDOR"] = metas[0]["VENDEDOR"]
             continue
 
-        # --- Construir items en CENTAVOS para aritmética exacta ---
+        # --- Construir items en centavos ---
         items = []
         for idx in indices:
             raw = Decimal(str(g.at[idx, "VENTA SUBTOTAL"])).quantize(
@@ -222,13 +223,17 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
         total_items_cents = sum(x["val_cents"] for x in items)
 
         # ============================================================
-        # CASO 2 VENDEDORES — Bidireccional exacto
+        # CASO ESPECIAL: Hugo + Alejandro — Motor exacto en centavos
         # ============================================================
-        if len(metas) == 2:
-            meta_a_cents = decimal_to_cents(metas[0]["META"])
-            meta_b_cents = decimal_to_cents(metas[1]["META"])
+        nombres_en_factura = {m["VENDEDOR"] for m in metas}
+        es_caso_especial   = (VENDEDOR_A in nombres_en_factura and
+                              VENDEDOR_B in nombres_en_factura and
+                              len(metas) == 2)
 
-            # Verificación de consistencia de datos fuente
+        if es_caso_especial:
+            meta_a_cents = decimal_to_cents(next(m["META"] for m in metas if m["VENDEDOR"] == VENDEDOR_A))
+            meta_b_cents = decimal_to_cents(next(m["META"] for m in metas if m["VENDEDOR"] == VENDEDOR_B))
+
             diferencia = abs(total_items_cents - meta_a_cents - meta_b_cents)
             if diferencia > 2:
                 facturas_error.append({
@@ -244,26 +249,23 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
                 df.loc[indices, "VENDEDOR"] = ganador
                 continue
 
-            # Intenta primero desde el lado de A
+            # Intenta desde el lado de Hugo
             solucion = subset_sum_exact(items, meta_a_cents)
-
             if solucion is not None:
                 sol_set = set(solucion)
                 for item in items:
                     df.at[item["idx"], "VENDEDOR"] = (
-                        metas[0]["VENDEDOR"] if item["idx"] in sol_set
-                        else metas[1]["VENDEDOR"]
+                        VENDEDOR_A if item["idx"] in sol_set else VENDEDOR_B
                     )
                 continue
 
-            # Si falla desde A, intenta desde el lado de B
+            # Intenta desde el lado de Alejandro
             solucion_b = subset_sum_exact(items, meta_b_cents)
             if solucion_b is not None:
                 sol_set_b = set(solucion_b)
                 for item in items:
                     df.at[item["idx"], "VENDEDOR"] = (
-                        metas[1]["VENDEDOR"] if item["idx"] in sol_set_b
-                        else metas[0]["VENDEDOR"]
+                        VENDEDOR_B if item["idx"] in sol_set_b else VENDEDOR_A
                     )
                 continue
 
@@ -272,10 +274,9 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
                 "FACTURA" : factura,
                 "PROBLEMA": "sin_particion_exacta",
                 "DETALLE" : (
-                    f"Montos consistentes pero sin combinación exacta en "
-                    f"profundidad 12. {metas[0]['VENDEDOR']}: "
-                    f"${meta_a_cents/100:.2f} | {metas[1]['VENDEDOR']}: "
-                    f"${meta_b_cents/100:.2f}"
+                    f"Sin combinación exacta en profundidad 12. "
+                    f"Hugo: ${meta_a_cents/100:.2f} | "
+                    f"Alejandro: ${meta_b_cents/100:.2f}"
                 )
             })
             ganador = max(metas, key=lambda x: x["META"])["VENDEDOR"]
@@ -283,22 +284,38 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
             continue
 
         # ============================================================
-        # CASO 3+ VENDEDORES — Exacto iterativo
+        # TODOS LOS DEMÁS CASOS — Motor rápido original
         # ============================================================
-        usados    = set()
-        metas_ord = sorted(metas, key=lambda x: abs(x["META"]))
+        usados = set()
+        metas.sort(key=lambda x: abs(x["META"]), reverse=False)
 
-        for meta_actual in metas_ord[:-1]:
-            objetivo_cents = decimal_to_cents(meta_actual["META"])
-            pool     = [x for x in items if x["idx"] not in usados]
-            solucion = subset_sum_exact(pool, objetivo_cents)
+        for i in range(len(metas) - 1):
+            meta_actual   = metas[i]
+            objetivo_norm = meta_actual["META"].quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+            tolerancia    = Decimal("0.50")
+            pool          = [x for x in items if x["idx"] not in usados]
 
-            if solucion is not None:
-                for idx in solucion:
-                    df.at[idx, "VENDEDOR"] = meta_actual["VENDEDOR"]
-                    usados.add(idx)
+            items_validos = [x for x in pool
+                             if abs(Decimal(str(x["val_cents"])) / 100) <= (abs(objetivo_norm) + Decimal("2.00"))]
+            items_sorted  = sorted(items_validos, key=lambda x: abs(x["val_cents"]), reverse=True)[:25]
+            max_depth     = min(len(items_sorted), 5)
+            sol           = None
 
-        vendedor_mayor    = metas_ord[-1]["VENDEDOR"]
+            for r in range(1, max_depth + 1):
+                for combo in itertools.combinations(items_sorted, r):
+                    suma = sum(Decimal(str(x["val_cents"])) / 100 for x in combo)
+                    if abs(suma.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP) - objetivo_norm) <= tolerancia:
+                        sol = combo
+                        break
+                if sol:
+                    break
+
+            if sol:
+                for it in sol:
+                    df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
+                    usados.add(it["idx"])
+
+        vendedor_mayor    = metas[-1]["VENDEDOR"]
         indices_restantes = [x["idx"] for x in items if x["idx"] not in usados]
         if indices_restantes:
             df.loc[indices_restantes, "VENDEDOR"] = vendedor_mayor
@@ -383,10 +400,9 @@ def show():
                 else:
                     df["SUCURSAL"] = sucursal
 
-                    prog_bar.progress(60, text="🧮 Asignando Vendedores (Motor Exacto)...")
+                    prog_bar.progress(60, text="🧮 Asignando Vendedores...")
                     df, errores_vendedor = apply_vendor_logic_fast(df, mapa)
 
-                    # Mostrar reporte de errores si existen
                     if errores_vendedor:
                         df_err = pd.DataFrame(errores_vendedor)
                         st.warning(f"⚠️ {len(errores_vendedor)} factura(s) requieren revisión manual:")
