@@ -147,13 +147,16 @@ def process_main_bpro(uploaded_file):
                 })
     return pd.DataFrame(rows)
 
-def subset_sum_solver_fast(items, objetivo):
-    tolerancia = Decimal("0.50")
+def subset_sum_solver_precise(items, objetivo):
+    """
+    Versión mejorada con mayor profundidad de búsqueda para cuadre exacto.
+    """
+    tolerancia = Decimal("0.05")
     objetivo_norm = objetivo.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
     
-    items_validos = [x for x in items if abs(x["val"]) <= (abs(objetivo_norm) + Decimal("2.00"))]
-    items_sorted = sorted(items_validos, key=lambda x: abs(x["val"]), reverse=True)[:25]
-    max_depth = min(len(items_sorted), 5)
+    items_validos = [x for x in items if abs(x["val"]) <= (abs(objetivo_norm) + Decimal("10.00"))]
+    items_sorted = sorted(items_validos, key=lambda x: abs(x["val"]), reverse=True)
+    max_depth = min(len(items_sorted), 10)
     
     for r in range(1, max_depth + 1):
         for combo in itertools.combinations(items_sorted, r):
@@ -194,16 +197,25 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
             items_todos.append({"idx": idx, "val": val_dec})
             
         usados = set()
-        metas.sort(key=lambda x: abs(x["META"]), reverse=False) 
+        # Ordenamos de mayor a menor para buscar los montos grandes y difíciles primero
+        metas.sort(key=lambda x: abs(x["META"]), reverse=True) 
         
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
             pool = [x for x in items_todos if x["idx"] not in usados]
-            sol = subset_sum_solver_fast(pool, objetivo)
+            
+            sol = subset_sum_solver_precise(pool, objetivo)
 
             if sol:
                 for it in sol:
+                    df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
+                    usados.add(it["idx"])
+            else:
+                # Fallback: Si no hay match exacto, asignamos la pieza individual más parecida
+                pool_sorted = sorted(pool, key=lambda x: abs(x["val"] - objetivo))
+                if pool_sorted and abs(pool_sorted[0]["val"] - objetivo) < Decimal("5.00"):
+                    it = pool_sorted[0]
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
 
@@ -239,7 +251,6 @@ def show():
         lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
         
         # 🧠 LÓGICA INTELIGENTE: Obtenemos el mes actual del sistema (1 al 12)
-        # Le restamos 1 porque las listas en Python empiezan en 0
         mes_actual_idx = datetime.now().month - 1
         
         # Le pasamos ese índice al selectbox para que lo seleccione automáticamente
@@ -298,7 +309,7 @@ def show():
                 else:
                     df["SUCURSAL"] = sucursal
                     
-                    prog_bar.progress(60, text="🧮 Asignando Vendedores (Motor Turbo)...")
+                    prog_bar.progress(60, text="🧮 Asignando Vendedores (Motor Precisión)...")
                     df = apply_vendor_logic_fast(df, mapa)
                     
                     prog_bar.progress(80, text="📚 Cruzando Catálogo...")
@@ -372,7 +383,7 @@ def show():
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    # 🌟 AQUÍ ESTÁ EL CAMBIO: Nombre original restaurado
+                    # 🌟 Nombre original restaurado
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                     
                     st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
