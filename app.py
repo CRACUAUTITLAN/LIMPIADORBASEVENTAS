@@ -1,6 +1,7 @@
 import streamlit as st
 import ventas      # Importamos tu archivo de ventas
 import inventario  # Importamos tu archivo de inventario
+import fill_rate   # 🔴 NUEVO: Importamos el nuevo limpiador de Fill Rate
 
 # CONFIGURACIÓN GENERAL
 st.set_page_config(page_title="Modelo BI Master", layout="wide")
@@ -13,7 +14,6 @@ if 'authenticated' not in st.session_state:
 if 'usuario_activo' not in st.session_state:
     st.session_state['usuario_activo'] = ""
 
-# 1. Agregamos a Ivonne a las credenciales
 CREDENTIALS = {
     "Manuel Salas": "Salas1234",
     "Eduardo Barrera": "Barrera1234",
@@ -46,13 +46,18 @@ with st.sidebar:
     usuario = st.session_state['usuario_activo']
     st.write(f"Hola, **{usuario}**")
     
-    # 2. Lógica de permisos por usuario
+    # Lógica de permisos por usuario
     if usuario == "Ivonne Ascencio":
         # Ivonne solo ve Inventario
         opciones_disponibles = ["Generador Base Almacen"]
     else:
         # Los demás (Manuel y Eduardo) ven todo
-        opciones_disponibles = ["Generador Base Ventas", "Generador Base Almacen"]
+        # 🔴 NUEVO: Agregamos la opción de Fill Rate
+        opciones_disponibles = [
+            "Generador Base Ventas", 
+            "Generador Base Almacen", 
+            "Generador Base Fill Rate"
+        ]
     
     opcion = st.radio(
         "Selecciona Herramienta:",
@@ -69,6 +74,7 @@ with st.sidebar:
 # ==========================
 if opcion == "Generador Base Ventas":
     ventas.show()  
-
 elif opcion == "Generador Base Almacen":
     inventario.show()
+elif opcion == "Generador Base Fill Rate":
+    fill_rate.show() # 🔴 NUEVO: Llamamos al módulo
