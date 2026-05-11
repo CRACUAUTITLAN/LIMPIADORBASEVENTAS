@@ -121,7 +121,8 @@ def show():
 
         # Si hay dataframes exitosos, consolidar
         if dataframes_limpios:
-            df_master = pd.concat(dataframes_limpios, ignore_type=True)
+            # CORRECCIÓN APLICADA AQUÍ: ignore_index=True
+            df_master = pd.concat(dataframes_limpios, ignore_index=True)
             
             # Limpieza final (quitar filas basura si se colaron nulos en NP)
             df_master = df_master.dropna(subset=["NP"])
