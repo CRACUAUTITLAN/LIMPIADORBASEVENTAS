@@ -158,10 +158,17 @@ def show():
             df_master = df_master.merge(df_cat, on='NP', how='left')
             
             # --- NUEVA REGLA: "X DEFINIR" ---
-            # Si cruza exitosamente usa DESCR_OFICIAL, si no encuentra el NP, pone "X DEFINIR"
             df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
-            
             df_master = df_master.drop(columns=['DESCR_OFICIAL'])
+
+            # --- BLINDAJE PARA POWER BI: FORZAR NÚMEROS Y QUITAR NULOS ---
+            columnas_num = ["CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "DIAS ENTREGA"]
+            for col in columnas_num:
+                df_master[col] = pd.to_numeric(df_master[col], errors='coerce')
+            
+            df_master["CANTIDAD SOLICITADA"] = df_master["CANTIDAD SOLICITADA"].fillna(0)
+            df_master["CANTIDAD ENTREGADA"] = df_master["CANTIDAD ENTREGADA"].fillna(0)
+            # -------------------------------------------------------------
 
             st.success(f"✅ ¡Base Madre generada y normalizada con éxito! (Total: {len(df_master)} registros)")
             
