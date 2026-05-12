@@ -7,7 +7,7 @@ def show():
     st.markdown("Homogeneiza las columnas de tus consignas, estandariza descripciones y genera la base final para Power BI.")
 
     # ==========================================
-    # 1. CARGA DEL CATÁLOGO MAESTRO (NUEVO)
+    # 1. CARGA DEL CATÁLOGO MAESTRO
     # ==========================================
     st.markdown("### 📚 1. Catálogo Maestro de Refacciones")
     st.info("Sube el archivo que contiene la descripción oficial de los números de parte. (Debe tener las columnas 'NP' y 'DESCRIPCION')")
@@ -29,7 +29,6 @@ def show():
 
     archivos_subidos = []
 
-    # Interfaz de subida dividida por Agencia
     c1, c2 = st.columns(2)
     
     with c1:
@@ -66,19 +65,14 @@ def show():
             else:
                 df_cat = pd.read_excel(archivo_catalogo)
             
-            # Limpiar nombres de columnas del catálogo para evitar errores de espacios
             df_cat.columns = [col.strip().upper() for col in df_cat.columns]
-            
-            # Detectar la columna de descripción (por si le pusieron acento o no)
             col_descr_cat = "DESCRIPCION" if "DESCRIPCION" in df_cat.columns else "DESCRIPCIÓN"
             
             if "NP" not in df_cat.columns or col_descr_cat not in df_cat.columns:
                 st.error(f"❌ El catálogo maestro debe tener exactamente las columnas 'NP' y '{col_descr_cat}'.")
                 return
                 
-            # Dejar solo NP y Descripcion oficial, y quitar duplicados por si acaso
             df_cat = df_cat[['NP', col_descr_cat]].drop_duplicates(subset=['NP'])
-            # Renombrar para el cruce
             df_cat = df_cat.rename(columns={col_descr_cat: "DESCR_OFICIAL"})
             
         except Exception as e:
@@ -95,13 +89,17 @@ def show():
             file = item["Archivo"]
 
             try:
-                # Leer el excel omitiendo las filas azules de arriba (Fila 12 es el header)
                 df = pd.read_excel(file, header=11)
                 
                 if "N° DE PARTE" in df.columns:
                     df = df.dropna(subset=["N° DE PARTE"])
                 
-                # Mapeo de columnas según el tipo de almacén
+                # --- NUEVA REGLA: FILTRO ESTRICTO PARA ALM. LIPU ---
+                if almacen == "ALM. LIPU" and "CONSIGNA" in df.columns:
+                    # Filtra y se queda ÚNICAMENTE con las filas donde CONSIGNA contiene "LIPU"
+                    df = df[df["CONSIGNA"].astype(str).str.contains("LIPU", case=False, na=False)]
+                
+                # Mapeo de columnas
                 if almacen == "IDEALEASE":
                     mapeo_idealease = {
                         "N° DE PARTE": "NP",
@@ -135,16 +133,13 @@ def show():
                     }
                     df = df.rename(columns=mapeo_estandar)
 
-                # Agregar columnas de dimensiones
                 df["AGENCIA"] = agencia
                 df["ALMACEN"] = almacen
 
-                # Verificar columnas existentes y rellenar nulos si faltan
                 columnas_existentes = [col for col in columnas_finales if col in df.columns]
                 for col_faltante in set(columnas_finales) - set(columnas_existentes):
                     df[col_faltante] = None
 
-                # Seleccionar estrictamente el orden de columnas
                 df_limpio = df[columnas_finales]
                 dataframes_limpios.append(df_limpio)
 
@@ -159,23 +154,19 @@ def show():
             df_master = pd.concat(dataframes_limpios, ignore_index=True)
             df_master = df_master.dropna(subset=["NP"])
 
-            # --- LA MAGIA: NORMALIZACIÓN CON EL CATÁLOGO ---
-            # Hacemos un cruce (Left Join) con el catálogo maestro usando el NP
+            # Cruce con el catálogo maestro
             df_master = df_master.merge(df_cat, on='NP', how='left')
             
-            # Reemplazamos la columna DESCR por la DESCR_OFICIAL del catálogo
-            # Si un NP no estaba en el catálogo, le dejamos la descripción que ya traía el archivo (fillna)
-            df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna(df_master['DESCR'])
+            # --- NUEVA REGLA: "X DEFINIR" ---
+            # Si cruza exitosamente usa DESCR_OFICIAL, si no encuentra el NP, pone "X DEFINIR"
+            df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
             
-            # Borramos la columna temporal de cruce para que quede la tabla impecable
             df_master = df_master.drop(columns=['DESCR_OFICIAL'])
 
             st.success(f"✅ ¡Base Madre generada y normalizada con éxito! (Total: {len(df_master)} registros)")
             
-            # Vista previa
             st.dataframe(df_master.head(15))
 
-            # Preparar descarga Excel
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df_master.to_excel(writer, index=False, sheet_name='Fact_Fill_Rate')
