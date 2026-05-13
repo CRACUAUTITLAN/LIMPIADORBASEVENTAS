@@ -15,7 +15,6 @@ if 'usuario_activo' not in st.session_state:
     st.session_state['usuario_activo'] = ""
 
 CREDENTIALS = {
-    "Manuel Salas": "Salas1234",
     "Eduardo Barrera": "Barrera1234",
     "Ivonne Ascencio": "Ascencio123."
 }
