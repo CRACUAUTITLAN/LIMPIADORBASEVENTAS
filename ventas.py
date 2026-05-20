@@ -1,4 +1,3 @@
-#Librerias
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -148,13 +147,16 @@ def process_main_bpro(uploaded_file):
                 })
     return pd.DataFrame(rows)
 
-def subset_sum_solver_fast(items, objetivo):
-    tolerancia = Decimal("0.50")
+def subset_sum_solver_precise(items, objetivo):
+    """
+    Versión mejorada con mayor profundidad de búsqueda para cuadre exacto.
+    """
+    tolerancia = Decimal("0.05")
     objetivo_norm = objetivo.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
     
-    items_validos = [x for x in items if abs(x["val"]) <= (abs(objetivo_norm) + Decimal("2.00"))]
-    items_sorted = sorted(items_validos, key=lambda x: abs(x["val"]), reverse=True)[:25]
-    max_depth = min(len(items_sorted), 5)
+    items_validos = [x for x in items if abs(x["val"]) <= (abs(objetivo_norm) + Decimal("10.00"))]
+    items_sorted = sorted(items_validos, key=lambda x: abs(x["val"]), reverse=True)
+    max_depth = min(len(items_sorted), 10)
     
     for r in range(1, max_depth + 1):
         for combo in itertools.combinations(items_sorted, r):
@@ -195,16 +197,25 @@ def apply_vendor_logic_fast(df, mapa_vendedores):
             items_todos.append({"idx": idx, "val": val_dec})
             
         usados = set()
-        metas.sort(key=lambda x: abs(x["META"]), reverse=False) 
+        # Ordenamos de mayor a menor para buscar los montos grandes y difíciles primero
+        metas.sort(key=lambda x: abs(x["META"]), reverse=True) 
         
         for i in range(len(metas) - 1):
             meta_actual = metas[i]
             objetivo = meta_actual["META"]
             pool = [x for x in items_todos if x["idx"] not in usados]
-            sol = subset_sum_solver_fast(pool, objetivo)
+            
+            sol = subset_sum_solver_precise(pool, objetivo)
 
             if sol:
                 for it in sol:
+                    df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
+                    usados.add(it["idx"])
+            else:
+                # Fallback: Si no hay match exacto, asignamos la pieza individual más parecida
+                pool_sorted = sorted(pool, key=lambda x: abs(x["val"] - objetivo))
+                if pool_sorted and abs(pool_sorted[0]["val"] - objetivo) < Decimal("5.00"):
+                    it = pool_sorted[0]
                     df.at[it["idx"], "VENDEDOR"] = meta_actual["VENDEDOR"]
                     usados.add(it["idx"])
 
@@ -240,14 +251,11 @@ def show():
         lista_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
         
         # 🧠 LÓGICA INTELIGENTE: Obtenemos el mes actual del sistema (1 al 12)
-        # Le restamos 1 porque las listas en Python empiezan en 0
         mes_actual_idx = datetime.now().month - 1
         
-        # Le pasamos ese índice al selectbox para que lo seleccione automáticamente
         mes_trabajo = st.selectbox("📆 Mes de Trabajo:", lista_meses, index=mes_actual_idx)
 
     with col_conf3:
-        # Ya tomaba el año automático
         anio_actual_sistema = str(datetime.now().year)
         anio_texto = st.text_input("📅 Año de Trabajo:", value=anio_actual_sistema)
 
@@ -265,7 +273,6 @@ def show():
 
     file_acumulada = None
     
-    # 🌟 LÓGICA DE INTERFAZ POR MES:
     if mes_trabajo == "ENERO":
         col1, col2, col3 = st.columns(3)
         with col1: file_bpro = st.file_uploader("1. BPro (.xls)", type=["xls", "xlsx"], key=f"b_{uid}")
@@ -280,7 +287,6 @@ def show():
 
     # --- BOTÓN DE EJECUCIÓN ---
     if st.button("🚀 GENERAR BASE MAESTRA"):
-        # 🌟 VALIDACIONES ANTES DE ARRANCAR
         if not (file_bpro and file_vend and file_cat):
             st.warning("⚠️ Sube los archivos requeridos (BPro, Vendedores, Catálogo).")
         elif mes_trabajo != "ENERO" and not file_acumulada:
@@ -299,7 +305,7 @@ def show():
                 else:
                     df["SUCURSAL"] = sucursal
                     
-                    prog_bar.progress(60, text="🧮 Asignando Vendedores (Motor Turbo)...")
+                    prog_bar.progress(60, text="🧮 Asignando Vendedores (Motor Precisión)...")
                     df = apply_vendor_logic_fast(df, mapa)
                     
                     prog_bar.progress(80, text="📚 Cruzando Catálogo...")
@@ -311,7 +317,7 @@ def show():
                     
                     # 2. LIMPIEZA DE LA BASE BPRO
                     df["NP"] = df["NP"].astype(str).str.strip()
-                    df = df.drop_duplicates()
+                    # 🛑 SE ELIMINÓ df.drop_duplicates() AQUÍ PARA PERMITIR DUPLICADOS LEGALES EN FACTURAS
                     
                     # 3. CRUCE SEGURO 1 a 1
                     df_final = pd.merge(df, df_cat[['NP', 'LINEA', 'CATEGORIA']], on='NP', how='left', suffixes=('_orig', '_new'))
@@ -344,13 +350,10 @@ def show():
                         prog_bar.progress(90, text=f"🔄 Integrando con Acumulado (Sobrescribiendo {mes_trabajo})...")
                         df_acum = pd.read_excel(file_acumulada)
                         
-                        # 🛡️ REGLA DE ORO: Borramos cualquier registro viejo del mes actual en la base histórica
                         df_acum = df_acum[df_acum["mes"] != mes_trabajo]
                         
-                        # Concatenamos la historia con lo limpio del mes actual
                         df_final = pd.concat([df_acum, df_final], ignore_index=True)
 
-                        # Reconfigurar FECHA_DT ya que df_acum no la trae viva y ordenar todo de nuevo
                         df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
                     # ==============================================================================
 
@@ -373,7 +376,6 @@ def show():
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Datos')
                     
-                    # 🌟 AQUÍ ESTÁ EL CAMBIO: Nombre original restaurado
                     nombre_archivo = f"{sucursal}_Ventas_{anio_texto}_MASTER.xlsx"
                     
                     st.download_button(f"📥 Descargar {nombre_archivo}", data=buffer.getvalue(), 
@@ -381,4 +383,3 @@ def show():
                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             except Exception as e:
                 st.error(f"Error procesando la información: {e}")
-                
