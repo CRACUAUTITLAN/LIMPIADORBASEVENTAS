@@ -16,7 +16,8 @@ if 'usuario_activo' not in st.session_state:
 
 CREDENTIALS = {
     "Eduardo Barrera": "Barrera1234",
-    "Ivonne Ascencio": "Ascencio123."
+    "Ivonne Ascencio": "Ascencio123.",
+    "Luis Adrian" : "Luis1234."
 }
 
 def check_login(user, password):
