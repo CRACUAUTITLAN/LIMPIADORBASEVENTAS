@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import io
@@ -9,8 +8,74 @@ from google.oauth2 import service_account
 import google.auth.transport.requests
 
 def normalizar_hora(val):
-    # ... [MANTÉN LA MISMA FUNCIÓN normalizar_hora QUE YA TENÍAMOS] ...
-    pass # (Asegúrate de pegar el código completo de la función aquí)
+    """
+    Toma cualquier formato de hora de Excel (Texto, AM/PM, decimal o datetime)
+    y lo convierte a un formato ESTRICTO de 24 horas: 'HH:MM:SS'.
+    Si está vacío o tiene un error crónico, devuelve '00:00:00'.
+    """
+    if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
+        return "00:00:00"
+    
+    # Caso 1: Ya es un objeto nativo de hora o timestamp de Pandas/Python
+    if isinstance(val, (pd.Timestamp, datetime.time, datetime.datetime)):
+        try:
+            return val.strftime('%H:%M:%S')
+        except:
+            pass
+
+    # Convertir a cadena limpia en minúsculas para procesar texto
+    val_str = str(val).strip().lower()
+    
+    # Si viene una fecha y hora junta (ej. '2026-03-27 09:10:34') nos quedamos solo con la hora
+    if " " in val_str and (":" in val_str.split(" ")[1] or "m" in val_str):
+        partes_espacio = val_str.split(" ")
+        for parte in partes_espacio:
+            if ":" in parte:
+                val_str = parte
+                if "a" in val_str or "p" in val_str:
+                    val_str += " pm" if "p" in str(val).lower() else " am"
+                break
+
+    # Caso 2: Identificar si es formato de la tarde (PM)
+    es_pm = False
+    if "p" in val_str:
+        es_pm = True
+    
+    # Limpiar rastro de letras, puntos y espacios (conservar solo dígitos y dos puntos)
+    hora_limpia = re.sub(r'[^0-9:]', '', val_str)
+    
+    # Si al limpiar nos quedamos sin nada, validar si era un número flotante de Excel (ej. 0.6041)
+    if not hora_limpia or ":" not in hora_limpia:
+        try:
+            total_seconds = int(float(val_str) * 86400)
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        except:
+            return "00:00:00"
+
+    # Separar horas, minutos y segundos para reconstrucción final
+    partes = hora_limpia.split(":")
+    try:
+        h = int(partes[0])
+        m = int(partes[1]) if len(partes) > 1 else 0
+        s = int(partes[2]) if len(partes) > 2 else 0
+        
+        # Ajuste de formato 12 a 24 horas si detectamos PM o AM límite
+        if es_pm and h < 12:
+            h += 12
+        elif not es_pm and h == 12:
+            h = 0
+            
+        # Validar límites lógicos del tiempo
+        if h >= 24 or m >= 60 or s >= 60:
+            return "00:00:00"
+            
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    except:
+        return "00:00:00"
+
 
 # ==========================================
 # 🤖 AUTENTICACIÓN DEL ROBOT
@@ -57,11 +122,11 @@ def show():
         "ALM. UTEP SAN LUIS": "https://docs.google.com/spreadsheets/d/1tdRJEgnmb3Mg8kOhXEAvgPsMQLz60UE6nhLWLV1xk9o/export?format=csv&gid=0"
     }
 
+    # Orden final estricto e inalterable para Power BI
     columnas_finales = [
-        "AGENCIA", "ALMACEN", "NP", "DESCR", "CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", 
-        "ESTATUS", "VALE", "CONSIGNA", "OC TRAXION", "ENTRADA ALMACEN", "FACTURA", 
-        "COMENTARIOS", "FECHA SOLICITUD", "HORA SOLICITUD", "FECHA ENTREGA", 
-        "HORA ENTREGA", "DIAS ENTREGA", "ÉXITO DE ENTREGA"
+        "AGENCIA", "ALMACEN", "NP", "DESCR", "FECHA SOLICITUD (DIA/MES/AÑO)", 
+        "HORA SOLICITUD", "FECHA ENTREGA (DIA/MES/AÑO)", "HORA ENTREGA (Formato 24 hrs)", 
+        "DIAS ENTREGA", "CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "ESTATUS"
     ]
 
     def get_agencia(nombre_almacen):
@@ -120,14 +185,25 @@ def show():
                         if "N° DE PARTE" in df.columns:
                             df = df.dropna(subset=["N° DE PARTE"])
                         
-                        # Filtro especial LIPU
-                        if almacen == "ALM. LIPU" and "CONSIGNA" in df.columns:
-                            df = df[df["CONSIGNA"].astype(str).str.contains("LIPU", case=False, na=False)]
+                        # --- FILTRO DE SEGURIDAD POR CONSIGNA ---
+                        if "CONSIGNA" in df.columns:
+                            palabra_clave = almacen.replace("ALM. ", "").replace("BISONTE ", "").strip()
+                            df = df[df["CONSIGNA"].astype(str).str.contains(palabra_clave, case=False, na=False)]
                         
-                        df = df.rename(columns={"N° DE PARTE": "NP", "DESCRIPCION": "DESCR"})
+                        # --- TRADUCCIÓN DE COLUMNAS PARA POWER BI ---
+                        mapeo_nombres = {
+                            "N° DE PARTE": "NP", 
+                            "DESCRIPCION": "DESCR",
+                            "FECHA SOLICITUD": "FECHA SOLICITUD (DIA/MES/AÑO)",
+                            "FECHA ENTREGA": "FECHA ENTREGA (DIA/MES/AÑO)",
+                            "HORA ENTREGA": "HORA ENTREGA (Formato 24 hrs)"
+                        }
+                        df = df.rename(columns=mapeo_nombres)
+                        
                         df["AGENCIA"] = agencia
                         df["ALMACEN"] = almacen
 
+                        # Forzar la creación de columnas si alguna falta
                         columnas_existentes = [col for col in columnas_finales if col in df.columns]
                         for col_faltante in set(columnas_finales) - set(columnas_existentes):
                             df[col_faltante] = None
@@ -151,23 +227,30 @@ def show():
                 df_master["NP"] = df_master["NP"].astype(str).str.strip()
                 df_master = df_master[df_master["NP"] != ""]
 
+                # Cruce de normalización con catálogo
                 df_master = df_master.merge(df_cat, on='NP', how='left')
                 df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
                 df_master = df_master.drop(columns=['DESCR_OFICIAL'])
 
-                # BLINDAJES
+                # =========================================================
+                # 🛡️ BLINDAJES CON LOS NOMBRES EXACTOS DE POWER BI
+                # =========================================================
                 columnas_num = ["CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "DIAS ENTREGA"]
                 for col in columnas_num:
                     df_master[col] = pd.to_numeric(df_master[col], errors='coerce').fillna(0)
                     df_master[col] = df_master[col].astype(int)
 
                 df_master["HORA SOLICITUD"] = df_master["HORA SOLICITUD"].apply(normalizar_hora)
-                df_master["HORA ENTREGA"] = df_master["HORA ENTREGA"].apply(normalizar_hora)
+                df_master["HORA ENTREGA (Formato 24 hrs)"] = df_master["HORA ENTREGA (Formato 24 hrs)"].apply(normalizar_hora)
 
-                for col_fecha in ["FECHA SOLICITUD", "FECHA ENTREGA"]:
-                    df_master[col_fecha] = pd.to_datetime(df_master[col_fecha], format="%d/%m/%Y", errors='coerce')
-                    if col_fecha == "FECHA ENTREGA":
-                        df_master[col_fecha] = df_master[col_fecha].fillna(df_master["FECHA SOLICITUD"])
+                for col_fecha in ["FECHA SOLICITUD (DIA/MES/AÑO)", "FECHA ENTREGA (DIA/MES/AÑO)"]:
+                    # Algunos Excel exportados a CSV usan DD/MM/YYYY, pero si es de Drive suele venir mezclado. 
+                    # El modo dayfirst=True y errors='coerce' es más robusto.
+                    df_master[col_fecha] = pd.to_datetime(df_master[col_fecha], dayfirst=True, errors='coerce')
+                    
+                    if col_fecha == "FECHA ENTREGA (DIA/MES/AÑO)":
+                        df_master[col_fecha] = df_master[col_fecha].fillna(df_master["FECHA SOLICITUD (DIA/MES/AÑO)"])
+                        
                     df_master[col_fecha] = df_master[col_fecha].fillna(pd.Timestamp('2026-01-01'))
                     df_master[col_fecha] = df_master[col_fecha].dt.strftime('%Y-%m-%d')
 
