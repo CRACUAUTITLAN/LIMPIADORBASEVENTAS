@@ -16,17 +16,14 @@ def normalizar_hora(val):
     if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
         return "00:00:00"
     
-    # Caso 1: Ya es un objeto nativo de hora o timestamp de Pandas/Python
     if isinstance(val, (pd.Timestamp, datetime.time, datetime.datetime)):
         try:
             return val.strftime('%H:%M:%S')
         except:
             pass
 
-    # Convertir a cadena limpia en minúsculas para procesar texto
     val_str = str(val).strip().lower()
     
-    # Si viene una fecha y hora junta (ej. '2026-03-27 09:10:34') nos quedamos solo con la hora
     if " " in val_str and (":" in val_str.split(" ")[1] or "m" in val_str):
         partes_espacio = val_str.split(" ")
         for parte in partes_espacio:
@@ -36,15 +33,12 @@ def normalizar_hora(val):
                     val_str += " pm" if "p" in str(val).lower() else " am"
                 break
 
-    # Caso 2: Identificar si es formato de la tarde (PM)
     es_pm = False
     if "p" in val_str:
         es_pm = True
     
-    # Limpiar rastro de letras, puntos y espacios (conservar solo dígitos y dos puntos)
     hora_limpia = re.sub(r'[^0-9:]', '', val_str)
     
-    # Si al limpiar nos quedamos sin nada, validar si era un número flotante de Excel (ej. 0.6041)
     if not hora_limpia or ":" not in hora_limpia:
         try:
             total_seconds = int(float(val_str) * 86400)
@@ -55,20 +49,17 @@ def normalizar_hora(val):
         except:
             return "00:00:00"
 
-    # Separar horas, minutos y segundos para reconstrucción final
     partes = hora_limpia.split(":")
     try:
         h = int(partes[0])
         m = int(partes[1]) if len(partes) > 1 else 0
         s = int(partes[2]) if len(partes) > 2 else 0
         
-        # Ajuste de formato 12 a 24 horas si detectamos PM o AM límite
         if es_pm and h < 12:
             h += 12
         elif not es_pm and h == 12:
             h = 0
             
-        # Validar límites lógicos del tiempo
         if h >= 24 or m >= 60 or s >= 60:
             return "00:00:00"
             
@@ -90,7 +81,7 @@ def get_auth_headers():
             scopes=['https://www.googleapis.com/auth/drive.readonly']
         )
         auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req) # Refresca y obtiene un token válido
+        creds.refresh(auth_req) 
         return {"Authorization": f"Bearer {creds.token}"}
     except Exception as e:
         st.error(f"⚠️ Error al conectar el Robot con Google: {e}")
@@ -126,7 +117,8 @@ def show():
     columnas_finales = [
         "AGENCIA", "ALMACEN", "NP", "DESCR", "FECHA SOLICITUD (DIA/MES/AÑO)", 
         "HORA SOLICITUD", "FECHA ENTREGA (DIA/MES/AÑO)", "HORA ENTREGA (Formato 24 hrs)", 
-        "DIAS ENTREGA", "CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "ESTATUS"
+        "DIAS ENTREGA", "CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "ESTATUS",
+        "VALE", "CONSIGNA", "OC TRAXION", "ENTRADA ALMACEN", "FACTURA", "COMENTARIOS", "ÉXITO DE ENTREGA"
     ]
 
     def get_agencia(nombre_almacen):
@@ -144,17 +136,16 @@ def show():
 
         with st.spinner("🤖 El Robot se está conectando a Google Drive..."):
             
-            # 1. Obtener la Llave Maestra del Robot
             headers = get_auth_headers()
 
-            # 2. Leer Catálogo Maestro
+            # Leer Catálogo Maestro
             try:
                 if archivo_catalogo.name.endswith('.csv'):
                     df_cat = pd.read_csv(archivo_catalogo)
                 else:
                     df_cat = pd.read_excel(archivo_catalogo)
                 
-                df_cat.columns = [col.strip().upper() for col in df_cat.columns]
+                df_cat.columns = [str(col).strip().upper() for col in df_cat.columns]
                 col_descr_cat = "DESCRIPCION" if "DESCRIPCION" in df_cat.columns else "DESCRIPCIÓN"
                 
                 df_cat = df_cat[['NP', col_descr_cat]].drop_duplicates(subset=['NP'])
@@ -165,7 +156,6 @@ def show():
                 st.error(f"❌ Error al procesar el Catálogo Maestro: {e}")
                 return
 
-            # 3. Extraer de Google Sheets vía API Privada
             dataframes_limpios = []
             errores = []
             barra = st.progress(0)
@@ -175,35 +165,47 @@ def show():
                 agencia = get_agencia(almacen)
                 
                 try:
-                    # El Robot "toca la puerta" de Drive con su llave y descarga el CSV en memoria
                     response = requests.get(url, headers=headers)
                     
                     if response.status_code == 200:
-                        # Leer el texto descargado ignorando la cabecera (11 filas)
                         df = pd.read_csv(io.StringIO(response.text), skiprows=11)
                         
-                        if "N° DE PARTE" in df.columns:
-                            df = df.dropna(subset=["N° DE PARTE"])
+                        # LIMPIEZA DE NOMBRES DE COLUMNAS (Evita que NP salga en blanco)
+                        df.columns = [str(c).strip() for c in df.columns]
                         
-                        # --- FILTRO DE SEGURIDAD POR CONSIGNA ---
+                        for col in df.columns:
+                            col_upper = col.upper()
+                            if "PARTE" in col_upper or "NP" == col_upper:
+                                df = df.rename(columns={col: "NP"})
+                            elif "DESCRIP" in col_upper:
+                                df = df.rename(columns={col: "DESCR"})
+                            elif "FECHA SOL" in col_upper:
+                                df = df.rename(columns={col: "FECHA SOLICITUD (DIA/MES/AÑO)"})
+                            elif "FECHA ENT" in col_upper:
+                                df = df.rename(columns={col: "FECHA ENTREGA (DIA/MES/AÑO)"})
+                            elif "HORA ENT" in col_upper:
+                                df = df.rename(columns={col: "HORA ENTREGA (Formato 24 hrs)"})
+                        
+                        if "NP" in df.columns:
+                            df = df.dropna(subset=["NP"])
+                        
+                        # =========================================================
+                        # 🛡️ FILTROS ESTRICTOS EXCLUSIVOS PARA LIPU Y UTEP
+                        # =========================================================
                         if "CONSIGNA" in df.columns:
-                            palabra_clave = almacen.replace("ALM. ", "").replace("BISONTE ", "").strip()
-                            df = df[df["CONSIGNA"].astype(str).str.contains(palabra_clave, case=False, na=False)]
-                        
-                        # --- TRADUCCIÓN DE COLUMNAS PARA POWER BI ---
-                        mapeo_nombres = {
-                            "N° DE PARTE": "NP", 
-                            "DESCRIPCION": "DESCR",
-                            "FECHA SOLICITUD": "FECHA SOLICITUD (DIA/MES/AÑO)",
-                            "FECHA ENTREGA": "FECHA ENTREGA (DIA/MES/AÑO)",
-                            "HORA ENTREGA": "HORA ENTREGA (Formato 24 hrs)"
-                        }
-                        df = df.rename(columns=mapeo_nombres)
+                            df["CONSIGNA_UPPER"] = df["CONSIGNA"].astype(str).str.upper()
+                            
+                            if almacen == "ALM. LIPU":
+                                df = df[df["CONSIGNA_UPPER"].str.contains("LIPU", na=False)]
+                            elif almacen == "ALM. UTEP":
+                                df = df[df["CONSIGNA_UPPER"].str.contains("UTEP", na=False)]
+                                
+                            df = df.drop(columns=["CONSIGNA_UPPER"])
+                        # =========================================================
                         
                         df["AGENCIA"] = agencia
                         df["ALMACEN"] = almacen
 
-                        # Forzar la creación de columnas si alguna falta
                         columnas_existentes = [col for col in columnas_finales if col in df.columns]
                         for col_faltante in set(columnas_finales) - set(columnas_existentes):
                             df[col_faltante] = None
@@ -211,7 +213,7 @@ def show():
                         df_limpio = df[columnas_finales].copy()
                         dataframes_limpios.append(df_limpio)
                     else:
-                        errores.append(f"❌ Acceso Denegado a '{almacen}': El Robot no tiene permisos. (Dale compartir como Lector al correo del Robot).")
+                        errores.append(f"❌ Acceso Denegado a '{almacen}': El Robot no tiene permisos. HTTP {response.status_code}")
 
                 except Exception as e:
                     errores.append(f"❌ Error al extraer '{almacen}': {str(e)}")
@@ -224,17 +226,18 @@ def show():
             # 4. Consolidar Base Madre
             if dataframes_limpios:
                 df_master = pd.concat(dataframes_limpios, ignore_index=True)
+                
+                # Quitar posibles nulos arrastrados en el NP
+                df_master = df_master.dropna(subset=["NP"])
                 df_master["NP"] = df_master["NP"].astype(str).str.strip()
                 df_master = df_master[df_master["NP"] != ""]
+                df_master = df_master[df_master["NP"].str.lower() != "nan"]
 
-                # Cruce de normalización con catálogo
                 df_master = df_master.merge(df_cat, on='NP', how='left')
                 df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
                 df_master = df_master.drop(columns=['DESCR_OFICIAL'])
 
-                # =========================================================
-                # 🛡️ BLINDAJES CON LOS NOMBRES EXACTOS DE POWER BI
-                # =========================================================
+                # BLINDAJES
                 columnas_num = ["CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "DIAS ENTREGA"]
                 for col in columnas_num:
                     df_master[col] = pd.to_numeric(df_master[col], errors='coerce').fillna(0)
@@ -244,13 +247,9 @@ def show():
                 df_master["HORA ENTREGA (Formato 24 hrs)"] = df_master["HORA ENTREGA (Formato 24 hrs)"].apply(normalizar_hora)
 
                 for col_fecha in ["FECHA SOLICITUD (DIA/MES/AÑO)", "FECHA ENTREGA (DIA/MES/AÑO)"]:
-                    # Algunos Excel exportados a CSV usan DD/MM/YYYY, pero si es de Drive suele venir mezclado. 
-                    # El modo dayfirst=True y errors='coerce' es más robusto.
                     df_master[col_fecha] = pd.to_datetime(df_master[col_fecha], dayfirst=True, errors='coerce')
-                    
                     if col_fecha == "FECHA ENTREGA (DIA/MES/AÑO)":
                         df_master[col_fecha] = df_master[col_fecha].fillna(df_master["FECHA SOLICITUD (DIA/MES/AÑO)"])
-                        
                     df_master[col_fecha] = df_master[col_fecha].fillna(pd.Timestamp('2026-01-01'))
                     df_master[col_fecha] = df_master[col_fecha].dt.strftime('%Y-%m-%d')
 
