@@ -98,7 +98,6 @@ def show():
     st.markdown("---")
     st.markdown("### 🗂️ 2. Extracción Segura en la Nube")
 
-    # Links automatizados
     CONSIGNAS_LINKS = {
         "ALMACEN AFN": "https://docs.google.com/spreadsheets/d/1eDMQxTNrAJ3Ak-RLASoQyYmQP_UpubsLSDT3m-K_sIg/export?format=csv&gid=0",
         "BISONTE SLP": "https://docs.google.com/spreadsheets/d/1KYCIqdU95WtI_wSl48NYnZHunq93_blwTBr4lJY1MQI/export?format=csv&gid=0",
@@ -113,12 +112,22 @@ def show():
         "ALM. UTEP SAN LUIS": "https://docs.google.com/spreadsheets/d/1tdRJEgnmb3Mg8kOhXEAvgPsMQLz60UE6nhLWLV1xk9o/export?format=csv&gid=0"
     }
 
-    # Orden final estricto e inalterable para Power BI
+    # ====================================================================
+    # 🎯 ESTRUCTURA PURA PARA POWER BI (Exactamente 12 columnas)
+    # ====================================================================
     columnas_finales = [
-        "AGENCIA", "ALMACEN", "NP", "DESCR", "FECHA SOLICITUD (DIA/MES/AÑO)", 
-        "HORA SOLICITUD", "FECHA ENTREGA (DIA/MES/AÑO)", "HORA ENTREGA (Formato 24 hrs)", 
-        "DIAS ENTREGA", "CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "ESTATUS",
-        "VALE", "CONSIGNA", "OC TRAXION", "ENTRADA ALMACEN", "FACTURA", "COMENTARIOS", "ÉXITO DE ENTREGA"
+        "AGENCIA", 
+        "ALMACEN", 
+        "NP", 
+        "DESCR", 
+        "FECHA SOLICITUD (DIA/MES/AÑO)", 
+        "HORA SOLICITUD", 
+        "FECHA ENTREGA (DIA/MES/AÑO)", 
+        "HORA ENTREGA (Formato 24 hrs)", 
+        "DIAS ENTREGA", 
+        "CANTIDAD SOLICITADA", 
+        "CANTIDAD ENTREGADA", 
+        "ESTATUS"
     ]
 
     def get_agencia(nombre_almacen):
@@ -170,9 +179,9 @@ def show():
                     if response.status_code == 200:
                         df = pd.read_csv(io.StringIO(response.text), skiprows=11)
                         
-                        # LIMPIEZA DE NOMBRES DE COLUMNAS (Evita que NP salga en blanco)
                         df.columns = [str(c).strip() for c in df.columns]
                         
+                        # Limpieza de nombres de Excel -> Pandas
                         for col in df.columns:
                             col_upper = col.upper()
                             if "PARTE" in col_upper or "NP" == col_upper:
@@ -200,16 +209,18 @@ def show():
                             elif almacen == "ALM. UTEP":
                                 df = df[df["CONSIGNA_UPPER"].str.contains("UTEP", na=False)]
                                 
-                            df = df.drop(columns=["CONSIGNA_UPPER"])
+                            # OJO: Aquí no borramos la columna Consigna todavía, simplemente la usamos para filtrar
                         # =========================================================
                         
                         df["AGENCIA"] = agencia
                         df["ALMACEN"] = almacen
 
+                        # Rellenar con nulos si falta alguna de las 12 columnas obligatorias
                         columnas_existentes = [col for col in columnas_finales if col in df.columns]
                         for col_faltante in set(columnas_finales) - set(columnas_existentes):
                             df[col_faltante] = None
 
+                        # ✂️ AQUÍ CORTAMOS LAS COLUMNAS EXTRA (Vale, Consigna, Factura, etc. desaparecen aquí)
                         df_limpio = df[columnas_finales].copy()
                         dataframes_limpios.append(df_limpio)
                     else:
@@ -237,7 +248,7 @@ def show():
                 df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
                 df_master = df_master.drop(columns=['DESCR_OFICIAL'])
 
-                # BLINDAJES
+                # BLINDAJES MATEMÁTICOS Y DE FECHA
                 columnas_num = ["CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "DIAS ENTREGA"]
                 for col in columnas_num:
                     df_master[col] = pd.to_numeric(df_master[col], errors='coerce').fillna(0)
@@ -261,7 +272,7 @@ def show():
                     df_master.to_excel(writer, index=False, sheet_name='Fact_Fill_Rate')
                 
                 st.download_button(
-                    label="📥 Descargar Base Madre Normalizada",
+                    label="📥 Descargar Base Madre Normalizada (12 Columnas)",
                     data=buffer.getvalue(),
                     file_name="BASE_MADRE_FILL_RATE.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
