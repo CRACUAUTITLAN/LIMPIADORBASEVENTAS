@@ -4,4 +4,3 @@ openpyxl
 requests
 google-auth
 google-api-python-client
-xlrd ≥ 2.0.1
