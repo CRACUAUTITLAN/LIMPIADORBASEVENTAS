@@ -2,6 +2,7 @@ streamlit
 pandas
 openpyxl
 xlrd
+xlsxwriter
 requests
 google-auth
 google-api-python-client
