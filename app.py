@@ -1,7 +1,8 @@
 import streamlit as st
 import ventas      # Importamos tu archivo de ventas
 import inventario  # Importamos tu archivo de inventario
-import fill_rate   # 🔴 NUEVO: Importamos el nuevo limpiador de Fill Rate
+import fill_rate   # Importamos el nuevo limpiador de Fill Rate
+import almacen_actual_idealease # 🔴 NUEVO: Importamos el limpiador de Almacén Actual
 
 # CONFIGURACIÓN GENERAL
 st.set_page_config(page_title="Modelo BI Master", layout="wide")
@@ -46,17 +47,15 @@ with st.sidebar:
     usuario = st.session_state['usuario_activo']
     st.write(f"Hola, **{usuario}**")
     
-    # Lógica de permisos por usuario
     if usuario == "Ivonne Ascencio":
-        # Ivonne solo ve Inventario
         opciones_disponibles = ["Generador Base Almacen"]
     else:
-        # Los demás (Manuel y Eduardo) ven todo
-        # 🔴 NUEVO: Agregamos la opción de Fill Rate
+        # 🔴 NUEVO: Agregamos "ALMACEN ACTUAL IDEALEASE" a la lista
         opciones_disponibles = [
             "Generador Base Ventas", 
             "Generador Base Almacen", 
-            "Generador Base Fill Rate"
+            "Generador Base Fill Rate",
+            "ALMACEN ACTUAL IDEALEASE"
         ]
     
     opcion = st.radio(
@@ -77,4 +76,6 @@ if opcion == "Generador Base Ventas":
 elif opcion == "Generador Base Almacen":
     inventario.show()
 elif opcion == "Generador Base Fill Rate":
-    fill_rate.show() # 🔴 NUEVO: Llamamos al módulo
+    fill_rate.show() 
+elif opcion == "ALMACEN ACTUAL IDEALEASE":
+    almacen_actual_idealease.show() # 🔴 NUEVO: Llamamos a la vista
