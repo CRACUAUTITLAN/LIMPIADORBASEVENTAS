@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import re
@@ -109,4 +108,17 @@ def show():
 
                     # 6. Descarga del archivo final
                     buffer = io.BytesIO()
-                    with pd.ExcelWriter(
+                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                        df_final.to_excel(writer, index=False, sheet_name='Base_Limpia')
+                    
+                    nombre_archivo = f"Acumulado_Idealease_{datetime.now().strftime('%Y%m%d')}.xlsx" if file_historico else f"Diario_Idealease_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                    
+                    st.download_button(
+                        label="📥 Descargar Base Final",
+                        data=buffer.getvalue(),
+                        file_name=nombre_archivo,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+                except Exception as e:
+                    st.error(f"❌ Ocurrió un error inesperado al procesar: {e}")
