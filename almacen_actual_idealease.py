@@ -9,8 +9,7 @@ def show():
     st.title("🏭 ALMACÉN ACTUAL IDEALEASE")
     st.write("Genera tu base limpia del día y agrégala a tu histórico acumulado.")
 
-    # --- NUEVO: Selector de Fecha (Calendario) ---
-    # Por defecto aparece la fecha de hoy, pero puedes cambiarla si es un reporte atrasado.
+    # Selector de Fecha (Calendario)
     fecha_seleccionada = st.date_input("📅 Selecciona la fecha del reporte", datetime.now().date())
 
     col1, col2 = st.columns(2)
@@ -25,7 +24,7 @@ def show():
             return
 
         if st.button("🚀 Procesar y Generar Base"):
-            with st.spinner("Procesando información y actualizando histórico..."):
+            with st.spinner("Procesando información, normalizando datos y actualizando histórico..."):
                 try:
                     # 1. Cargar reporte diario
                     df = pd.read_excel(file_reporte)
@@ -95,27 +94,35 @@ def show():
                         "CAPACIDAD": df_limpio.get('CAPACIDAD', ''),
                         "ESTATUS": estatus_lista,
                         "CLIENTE/TALLER/DISPONIBILIDAD": cliente_lista,
-                        "FECHA": fecha_seleccionada.strftime("%d/%m/%Y") # Se usa la fecha seleccionada en el calendario
+                        "FECHA": fecha_seleccionada.strftime("%d/%m/%Y")
                     })
 
                     # 5. Lógica del Acumulado (Concatenar si hay histórico)
                     if file_historico:
                         df_historico = pd.read_excel(file_historico)
                         df_final = pd.concat([df_historico, df_dia], ignore_index=True)
-                        mensaje_exito = "✅ ¡Base limpiada y agregada al histórico correctamente!"
+                        mensaje_exito = "✅ ¡Base limpiada, normalizada y agregada al histórico correctamente!"
                     else:
                         df_final = df_dia
-                        mensaje_exito = "✅ ¡Base diaria limpiada con éxito! (No se adjuntó histórico)"
+                        mensaje_exito = "✅ ¡Base diaria limpiada y normalizada con éxito! (No se adjuntó histórico)"
 
-                    # --- NUEVO: Reemplazar celdas vacías con "SIN DATO" ---
-                    # Primero convertimos cadenas completamente vacías o puros espacios en nulos, luego rellenamos todos los nulos.
+                    # --- 6. NORMALIZACIÓN DE TIPOS DE DATO ---
+                    # Limpiamos cadenas vacías o puros espacios convirtiéndolos a NaN reales temporalmente
                     df_final = df_final.replace(r'^\s*$', np.nan, regex=True)
-                    df_final = df_final.fillna("SIN DATO")
+
+                    # Forzamos AÑO a ser estrictamente numérico entero (Int64 soporta valores nulos sin romper el tipo entero)
+                    df_final['AÑO'] = pd.to_numeric(df_final['AÑO'], errors='coerce').astype('Int64')
+
+                    # Para el resto de las columnas, aseguramos que sean texto y llenamos vacíos con "SIN DATO"
+                    cols_texto = ["MODELO", "VIN", "ECO", "PLACAS", "ADAPTACIÓN", "TIPO", "CAPACIDAD", "ESTATUS", "CLIENTE/TALLER/DISPONIBILIDAD", "FECHA"]
+                    for col in cols_texto:
+                        if col in df_final.columns:
+                            df_final[col] = df_final[col].fillna("SIN DATO").astype(str)
 
                     st.success(mensaje_exito)
                     st.dataframe(df_final)
 
-                    # 6. Descarga del archivo final
+                    # 7. Descarga del archivo final
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Base_Limpia')
