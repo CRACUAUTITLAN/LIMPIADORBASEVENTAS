@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import re
 from datetime import datetime
 import io
@@ -7,6 +8,10 @@ import io
 def show():
     st.title("🏭 ALMACÉN ACTUAL IDEALEASE")
     st.write("Genera tu base limpia del día y agrégala a tu histórico acumulado.")
+
+    # --- NUEVO: Selector de Fecha (Calendario) ---
+    # Por defecto aparece la fecha de hoy, pero puedes cambiarla si es un reporte atrasado.
+    fecha_seleccionada = st.date_input("📅 Selecciona la fecha del reporte", datetime.now().date())
 
     col1, col2 = st.columns(2)
     with col1:
@@ -67,7 +72,6 @@ def show():
                         else:
                             estatus_raw = str(row[col_estatus]).strip().upper() if pd.notna(row[col_estatus]) else ""
                             
-                            # Filtro para tolerar variaciones en la escritura
                             if "REEMPLAZO" in estatus_raw:
                                 estatus_lista.append("EN REEMPLAZO RENTA")
                             elif "RENTA" in estatus_raw:
@@ -91,19 +95,24 @@ def show():
                         "CAPACIDAD": df_limpio.get('CAPACIDAD', ''),
                         "ESTATUS": estatus_lista,
                         "CLIENTE/TALLER/DISPONIBILIDAD": cliente_lista,
-                        "FECHA": datetime.now().strftime("%d/%m/%Y")
+                        "FECHA": fecha_seleccionada.strftime("%d/%m/%Y") # Se usa la fecha seleccionada en el calendario
                     })
 
                     # 5. Lógica del Acumulado (Concatenar si hay histórico)
                     if file_historico:
                         df_historico = pd.read_excel(file_historico)
-                        # Concatenamos el histórico con el reporte del día
                         df_final = pd.concat([df_historico, df_dia], ignore_index=True)
-                        st.success("✅ ¡Base limpiada y agregada al histórico correctamente!")
+                        mensaje_exito = "✅ ¡Base limpiada y agregada al histórico correctamente!"
                     else:
                         df_final = df_dia
-                        st.success("✅ ¡Base diaria limpiada con éxito! (No se adjuntó histórico)")
+                        mensaje_exito = "✅ ¡Base diaria limpiada con éxito! (No se adjuntó histórico)"
 
+                    # --- NUEVO: Reemplazar celdas vacías con "SIN DATO" ---
+                    # Primero convertimos cadenas completamente vacías o puros espacios en nulos, luego rellenamos todos los nulos.
+                    df_final = df_final.replace(r'^\s*$', np.nan, regex=True)
+                    df_final = df_final.fillna("SIN DATO")
+
+                    st.success(mensaje_exito)
                     st.dataframe(df_final)
 
                     # 6. Descarga del archivo final
@@ -111,7 +120,7 @@ def show():
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_final.to_excel(writer, index=False, sheet_name='Base_Limpia')
                     
-                    nombre_archivo = f"Acumulado_Idealease_{datetime.now().strftime('%Y%m%d')}.xlsx" if file_historico else f"Diario_Idealease_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                    nombre_archivo = f"Acumulado_Idealease_{fecha_seleccionada.strftime('%Y%m%d')}.xlsx" if file_historico else f"Diario_Idealease_{fecha_seleccionada.strftime('%Y%m%d')}.xlsx"
                     
                     st.download_button(
                         label="📥 Descargar Base Final",
