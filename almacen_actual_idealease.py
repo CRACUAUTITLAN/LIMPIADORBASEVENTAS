@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import re
@@ -6,73 +7,81 @@ import io
 
 def show():
     st.title("🏭 ALMACÉN ACTUAL IDEALEASE")
-    st.write("Carga tu reporte diario para generar la base general limpia.")
+    st.write("Genera tu base limpia del día y agrégala a tu histórico acumulado.")
 
-    # Ya solo necesitamos subir un archivo, así que quitamos las dos columnas
-    file_reporte = st.file_uploader("📥 Sube el Reporte Diario (Debe ser formato Excel .xlsx)", type=['xlsx'])
+    col1, col2 = st.columns(2)
+    with col1:
+        file_reporte = st.file_uploader("📥 1. Sube el Reporte Diario (.xlsx)", type=['xlsx'])
+    with col2:
+        file_historico = st.file_uploader("📚 2. Sube la Base Histórica / Acumulado (Opcional)", type=['xlsx'])
 
     if file_reporte:
-        # Validación preventiva para evitar caídas del sistema con archivos CSV
         if file_reporte.name.lower().endswith('.csv'):
-            st.error("🚫 El archivo seleccionado es un CSV (.csv). Por favor, sube el archivo original directamente en formato de Excel (.xlsx).")
+            st.error("🚫 Por favor, sube el reporte diario en formato Excel (.xlsx), no en CSV.")
             return
 
-        if st.button("🚀 Procesar y Limpiar Base"):
-            with st.spinner("Procesando estructura y textos..."):
+        if st.button("🚀 Procesar y Generar Base"):
+            with st.spinner("Procesando información y actualizando histórico..."):
                 try:
-                    # 1. Cargar datos con pandas
+                    # 1. Cargar reporte diario
                     df = pd.read_excel(file_reporte)
                     
-                    # Normalizar nombres de columnas a mayúsculas para evitar errores por variaciones de caja
+                    # Normalizar columnas
                     df_cols_originales = [str(c).strip() for c in df.columns]
                     df.columns = [c.upper() for c in df_cols_originales]
                     
-                    # Mapeo flexible de columnas clave
                     col_no = 'NO.' if 'NO.' in df.columns else ('NO' if 'NO' in df.columns else None)
                     col_eco = 'ECO' if 'ECO' in df.columns else None
                     col_obs = 'OBSERVACIONES' if 'OBSERVACIONES' in df.columns else None
                     col_estatus = 'ESTATUS' if 'ESTATUS' in df.columns else None
                     
                     if not col_no or not col_eco or not col_obs or not col_estatus:
-                        st.error(f"🚫 Faltan columnas esenciales ('No.', 'ECO', 'OBSERVACIONES' o 'ESTATUS'). Columnas detectadas: {df_cols_originales}")
+                        st.error(f"🚫 Faltan columnas esenciales. Asegúrate de tener 'No.', 'ECO', 'OBSERVACIONES' y 'ESTATUS'.")
                         return
 
-                    # 2. Filtrar filas donde 'No.' y 'ECO' contengan valores numéricos válidos
+                    # 2. Filtrar filas válidas
                     df['NO_NUM'] = pd.to_numeric(df[col_no], errors='coerce')
                     df['ECO_NUM'] = pd.to_numeric(df[col_eco], errors='coerce')
                     df_limpio = df.dropna(subset=['NO_NUM', 'ECO_NUM']).copy()
 
-                    # Listado de series (VIN) con estatus fijo "EN RENTA"
                     vins_excepcion = [
                         "3MN2E82W4HD700055", "3MN2E82W7HD700115", "3MN2E82W7HD700051",
                         "3MN2E82W8HD700107", "3MN2E82W0HD600583", "3MN2E82W1HD600592"
                     ]
 
-                    # 3. Iterar renglón por renglón para aplicar reglas de negocio
+                    # 3. Procesar datos diarios
                     estatus_lista = []
                     cliente_lista = []
-                    
-                    # Expresión regular para ubicar fechas (ej. 26 JUL 24 o 9/DIC/23)
                     patron_fecha = r'\b\d{1,2}\s*[/]?\s*[a-zA-Z]+\s*[/]?\s*\d{2,4}\b'
 
                     for index, row in df_limpio.iterrows():
-                        # --- LIMPIEZA DE CLIENTE (Texto previo a la fecha) ---
+                        # Cliente
                         obs_texto = str(row[col_obs]) if pd.notna(row[col_obs]) else ""
                         cliente = re.split(patron_fecha, obs_texto)[0].strip()
                         cliente_lista.append(cliente)
 
-                        # --- ASIGNACIÓN DE ESTATUS DESDE LA NUEVA COLUMNA O EXCEPCIÓN ---
+                        # Estatus inteligente
                         vin_actual = str(row['VIN']).strip() if 'VIN' in df_limpio.columns else ""
                         
                         if vin_actual in vins_excepcion:
                             estatus_lista.append("EN RENTA")
                         else:
-                            # Leemos directamente lo que Marianita capturó en la columna ESTATUS
-                            estatus_capturado = str(row[col_estatus]).strip().upper() if pd.notna(row[col_estatus]) else "SIN DEFINIR"
-                            estatus_lista.append(estatus_capturado)
+                            estatus_raw = str(row[col_estatus]).strip().upper() if pd.notna(row[col_estatus]) else ""
+                            
+                            # Filtro para tolerar variaciones en la escritura
+                            if "REEMPLAZO" in estatus_raw:
+                                estatus_lista.append("EN REEMPLAZO RENTA")
+                            elif "RENTA" in estatus_raw:
+                                estatus_lista.append("EN RENTA")
+                            elif "TALLER" in estatus_raw:
+                                estatus_lista.append("EN TALLER")
+                            elif "DISPONIBLE" in estatus_raw:
+                                estatus_lista.append("DISPONIBLE")
+                            else:
+                                estatus_lista.append("SIN DEFINIR")
 
-                    # 4. Estructurar la Base de Datos Final limpia
-                    df_final = pd.DataFrame({
+                    # 4. Crear DataFrame del día
+                    df_dia = pd.DataFrame({
                         "MODELO": df_limpio.get('MODELO', ''),
                         "VIN": df_limpio.get('VIN', ''),
                         "ECO": df_limpio.get('ECO', ''),
@@ -83,24 +92,21 @@ def show():
                         "CAPACIDAD": df_limpio.get('CAPACIDAD', ''),
                         "ESTATUS": estatus_lista,
                         "CLIENTE/TALLER/DISPONIBILIDAD": cliente_lista,
-                        "FECHA": datetime.now().strftime("%d/%m/%Y")  # Formato DIA/MES/AÑO
+                        "FECHA": datetime.now().strftime("%d/%m/%Y")
                     })
 
-                    st.success("✅ ¡Base de datos limpiada y procesada con éxito!")
+                    # 5. Lógica del Acumulado (Concatenar si hay histórico)
+                    if file_historico:
+                        df_historico = pd.read_excel(file_historico)
+                        # Concatenamos el histórico con el reporte del día
+                        df_final = pd.concat([df_historico, df_dia], ignore_index=True)
+                        st.success("✅ ¡Base limpiada y agregada al histórico correctamente!")
+                    else:
+                        df_final = df_dia
+                        st.success("✅ ¡Base diaria limpiada con éxito! (No se adjuntó histórico)")
+
                     st.dataframe(df_final)
 
-                    # Configurar la descarga del nuevo archivo de salida en formato Excel
+                    # 6. Descarga del archivo final
                     buffer = io.BytesIO()
-                    # Seguimos usando openpyxl aquí solo como motor para escribir el Excel de salida
-                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        df_final.to_excel(writer, index=False, sheet_name='Base_Limpia')
-                    
-                    st.download_button(
-                        label="📥 Descargar Base Limpia",
-                        data=buffer.getvalue(),
-                        file_name=f"Almacen_Idealease_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-                except Exception as e:
-                    st.error(f"❌ Ocurrió un error inesperado al procesar el archivo: {e}")
+                    with pd.ExcelWriter(
