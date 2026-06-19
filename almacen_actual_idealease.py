@@ -26,8 +26,8 @@ def show():
         if st.button("🚀 Procesar y Generar Base"):
             with st.spinner("Procesando información, normalizando datos y actualizando histórico..."):
                 try:
-                    # 1. Cargar reporte diario
-                    df = pd.read_excel(file_reporte)
+                    # 1. Cargar reporte diario forzando todo a texto para conservar el "0" inicial en el ECO
+                    df = pd.read_excel(file_reporte, dtype=str)
                     
                     # Normalizar columnas
                     df_cols_originales = [str(c).strip() for c in df.columns]
@@ -42,7 +42,7 @@ def show():
                         st.error(f"🚫 Faltan columnas esenciales. Asegúrate de tener 'No.', 'ECO', 'OBSERVACIONES' y 'ESTATUS'.")
                         return
 
-                    # 2. Filtrar filas válidas
+                    # 2. Filtrar filas válidas (las columnas numéricas se usan solo de forma temporal para limpiar vacíos)
                     df['NO_NUM'] = pd.to_numeric(df[col_no], errors='coerce')
                     df['ECO_NUM'] = pd.to_numeric(df[col_eco], errors='coerce')
                     df_limpio = df.dropna(subset=['NO_NUM', 'ECO_NUM']).copy()
@@ -99,7 +99,8 @@ def show():
 
                     # 5. Lógica del Acumulado (Concatenar si hay histórico)
                     if file_historico:
-                        df_historico = pd.read_excel(file_historico)
+                        # Cargar histórico forzando también a texto para conservar ceros
+                        df_historico = pd.read_excel(file_historico, dtype=str)
                         df_final = pd.concat([df_historico, df_dia], ignore_index=True)
                         mensaje_exito = "✅ ¡Base limpiada, normalizada y agregada al histórico correctamente!"
                     else:
