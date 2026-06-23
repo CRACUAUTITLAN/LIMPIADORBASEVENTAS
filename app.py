@@ -1,8 +1,9 @@
 import streamlit as st
-import ventas      # Importamos tu archivo de ventas
-import inventario  # Importamos tu archivo de inventario
-import fill_rate   # Importamos el nuevo limpiador de Fill Rate
-import almacen_actual_idealease # 🔴 NUEVO: Importamos el limpiador de Almacén Actual
+import ventas       
+import inventario  
+import fill_rate   
+import almacen_actual_idealease 
+import analisis_compras # 🔴 NUEVO: 1. Importamos la nueva app
 
 # CONFIGURACIÓN GENERAL
 st.set_page_config(page_title="Modelo BI Master", layout="wide")
@@ -50,18 +51,15 @@ with st.sidebar:
     if usuario == "Ivonne Ascencio":
         opciones_disponibles = ["Generador Base Almacen"]
     else:
-        # 🔴 NUEVO: Agregamos "ALMACEN ACTUAL IDEALEASE" a la lista
         opciones_disponibles = [
             "Generador Base Ventas", 
             "Generador Base Almacen", 
             "Generador Base Fill Rate",
-            "ALMACEN ACTUAL IDEALEASE"
+            "ALMACEN ACTUAL IDEALEASE",
+            "Análisis Eficiencia Compras" # 🔴 NUEVO: 2. Agregamos el nombre al menú
         ]
     
-    opcion = st.radio(
-        "Selecciona Herramienta:",
-        opciones_disponibles
-    )
+    opcion = st.radio("Selecciona Herramienta:", opciones_disponibles)
     
     st.markdown("---")
     if st.button("Cerrar Sesión"):
@@ -78,4 +76,6 @@ elif opcion == "Generador Base Almacen":
 elif opcion == "Generador Base Fill Rate":
     fill_rate.show() 
 elif opcion == "ALMACEN ACTUAL IDEALEASE":
-    almacen_actual_idealease.show() # 🔴 NUEVO: Llamamos a la vista
+    almacen_actual_idealease.show() 
+elif opcion == "Análisis Eficiencia Compras": # 🔴 NUEVO: 3. Llamamos a la vista
+    analisis_compras.show()
