@@ -344,6 +344,30 @@ def show():
 
                         df_final["FECHA_DT"] = pd.to_datetime(df_final["FECHA"], dayfirst=True, errors="coerce")
                     # ==============================================================================
+                    
+                    # ==============================================================================
+                    # 🛠️ REGLAS DE NEGOCIO FINALES PARA SUCURSALES
+                    # ==============================================================================
+                    
+                    # Se limpian los strings para evitar que espacios invisibles arruinen la búsqueda
+                    df_final["VENDEDOR"] = df_final["VENDEDOR"].astype(str).str.strip()
+                    df_final["ALMACEN"] = df_final["ALMACEN"].astype(str).str.strip()
+                    
+                    # 1. Regla: Guadalupe Leonela -> TULTITLAN
+                    mask_leonela = df_final["VENDEDOR"] == "GUADALUPE LEONELA EDWAR BAUTISTA"
+                    df_final.loc[mask_leonela, "SUCURSAL"] = "TULTITLAN"
+                    
+                    # 2. Regla: Juan Pablo y Daniela -> BAJIO
+                    vendedores_bajio = ["JUAN PABLO RODRIGUEZ LOREDO", "DANIELA OLGUIN MARTINEZ"]
+                    mask_vendedores_bajio = df_final["VENDEDOR"].isin(vendedores_bajio)
+                    df_final.loc[mask_vendedores_bajio, "SUCURSAL"] = "BAJIO"
+                    
+                    # 3. Regla: Almacenes específicos -> BAJIO
+                    almacenes_bajio = ["BISONTE SLP", "ALM. UTEP SAN LUIS"]
+                    mask_almacenes_bajio = df_final["ALMACEN"].isin(almacenes_bajio)
+                    df_final.loc[mask_almacenes_bajio, "SUCURSAL"] = "BAJIO"
+                    
+                    # ==============================================================================
 
                     # ORDEN FINAL Y LIMPIEZA DE COLUMNAS
                     df_final = df_final.sort_values(by=['FECHA_DT', 'CLIENTE'])
