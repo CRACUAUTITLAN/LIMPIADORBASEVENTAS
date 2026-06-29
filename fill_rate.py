@@ -253,10 +253,10 @@ def show():
 
     st.markdown("---")
     # ==========================================
-    # SECCIÓN 3: SIMULADOR WHAT-IF (RAZÓN MATEMÁTICA CORREGIDA)
+    # SECCIÓN 3: SIMULADOR WHAT-IF (LÓGICA COMBINADA FECHA + VOLUMEN)
     # ==========================================
     st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos por Sucursal)")
-    st.info("Simula el stock objetivo de tu modelo. Si la cantidad solicitada supera a la entregada, se evalúa el rescate por inventario.")
+    st.info("Detecta fallas operativas (Entregas tardías o incompletas) y simula el rescate si el Almacén hubiera tenido el stock que dictaba el Modelo.")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -271,7 +271,7 @@ def show():
             st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
             return
             
-        with st.spinner("🧠 Simulando líneas de surtido operativo vs plan estratégico..."):
+        with st.spinner("🧠 Evaluando Tiempos de Entrega, Cantidades y cruzando con el Plan Maestro..."):
             try:
                 # 1. Cargar Fill Rate y crear línea de tiempo
                 df_fill = pd.read_excel(archivo_fill_rate)
@@ -292,11 +292,33 @@ def show():
 
                 df_fill = df_fill.sort_values('FECHA_HORA_ORDEN')
                 
-                # 3. NUEVA LÓGICA MATEMÁTICA PURA (Solicitado vs Entregado Real)
-                df_fill['CANT_REAL_DIA_0'] = df_fill['CANTIDAD ENTREGADA']
+                # =========================================================================================
+                # 3. EL CORAZÓN DEL CÁLCULO: Evaluar fallas (Tarde o Incompleto)
+                # =========================================================================================
+                def calcular_entregas_efectivas_dia_0(row):
+                    cant_entregada = float(row.get('CANTIDAD ENTREGADA', 0))
+                    fecha_sol = str(row.get('FECHA SOLICITUD (DIA/MES/AÑO)', '')).strip()
+                    fecha_ent = str(row.get('FECHA ENTREGA (DIA/MES/AÑO)', '')).strip()
+                    
+                    # REGLA 1: Si la fecha de entrega es distinta (Días > 0), el Fill Rate efectivo de ese día fue 0.
+                    if fecha_sol != fecha_ent:
+                        return 0.0
+                    
+                    # REGLA 2: Si se entregó el mismo día, tomamos lo que se haya entregado (completo o parcial).
+                    return cant_entregada
+
+                # Calculamos cuánto se entregó REALMENTE sin fallar en tiempo
+                df_fill['CANT_REAL_DIA_0'] = df_fill.apply(calcular_entregas_efectivas_dia_0, axis=1)
+                
+                # Calculamos el faltante exacto que el modelo de traspasos debe intentar rescatar
                 df_fill['PIEZAS_FALTANTES_REALES'] = (df_fill['CANTIDAD SOLICITADA'] - df_fill['CANT_REAL_DIA_0']).clip(lower=0)
 
+                # Etiqueta visual para que lo identifiques rápido en la tabla
+                df_fill['ESTATUS REAL'] = df_fill['PIEZAS_FALTANTES_REALES'].apply(lambda x: "❌ Falla Operativa" if x > 0 else "✅ Entrega Correcta")
+
+                # =========================================================================================
                 # 4. Cargar Base de Traspasos (Meta de Stock del Modelo)
+                # =========================================================================================
                 stock_rescate_modelo = {}
                 xls_traspasos = pd.ExcelFile(archivo_traspasos)
                 
@@ -338,11 +360,13 @@ def show():
                             except:
                                 existencia = 0
                                 
-                            # El inventario supuesto inicial del lunes es lo que debían tener según el modelo o su stock físico real (lo que sea mayor)
+                            # El inventario supuesto inicial es lo que debían tener según el modelo o su stock físico (lo que sea mayor)
                             stock_inicial = max(meta, existencia)
                             stock_rescate_modelo[(almacen, np_val)] = stock_inicial
                             
+                # =========================================================================================
                 # 5. La Simulación cronológica descontando inventario virtual
+                # =========================================================================================
                 piezas_salvadas_list = []
                 cant_supuesta_dia_0 = []
                 
@@ -350,27 +374,26 @@ def show():
                     np_val = str(row['NP']).strip()
                     almacen = str(row['ALMACEN']).strip()
                     cant_sol = row['CANTIDAD SOLICITADA']
-                    cant_ent = row['CANTIDAD ENTREGADA']
-                    faltante = row['PIEZAS_FALTANTES_REALES']
+                    cant_real_d0 = row['CANT_REAL_DIA_0']
                     
                     llave = (almacen, np_val)
                     disp_rescate = stock_rescate_modelo.get(llave, 0.0)
                     
-                    # Cuántas piezas del pedido total puede cubrir el stock virtual del modelo
+                    # ¿Cuántas piezas del pedido TOTAL puede cubrir el stock que supuestamente tendríamos?
                     cant_supuesta_modelo = min(cant_sol, disp_rescate)
                     
-                    # Consumimos del inventario virtual las piezas solicitadas que el modelo pudo aguantar
+                    # Consumimos del inventario virtual las piezas simuladas
                     if llave in stock_rescate_modelo:
                         stock_rescate_modelo[llave] = max(0.0, stock_rescate_modelo[llave] - cant_supuesta_modelo)
                     
-                    # El rescate aplica si lo supuesto por el modelo supera a lo que realmente se entregó
-                    if cant_supuesta_modelo > cant_ent:
-                        piezas_salvadas = cant_supuesta_modelo - cant_ent
+                    # El rescate aplica si lo que el Modelo pudo surtir supera a lo que realmente se entregó
+                    if cant_supuesta_modelo > cant_real_d0:
+                        piezas_salvadas = cant_supuesta_modelo - cant_real_d0
                     else:
                         piezas_salvadas = 0.0
 
                     piezas_salvadas_list.append(piezas_salvadas)
-                    cant_supuesta_dia_0.append(cant_ent + piezas_salvadas)
+                    cant_supuesta_dia_0.append(cant_real_d0 + piezas_salvadas)
 
                 # Inyectar columnas finales para mapear en Power BI
                 df_fill['PIEZAS SALVADAS POR MODELO'] = piezas_salvadas_list
@@ -415,9 +438,10 @@ def show():
                     type="primary"
                 )
                 
-                # Tabla de visualización para auditoría inmediata
-                st.markdown("#### 🏆 Vista de Casos Surtidos / Salvados")
-                st.dataframe(df_fill[['ALMACEN', 'NP', 'CANTIDAD SOLICITADA', 'CANT_REAL_DIA_0', 'PIEZAS_FALTANTES_REALES', 'PIEZAS SALVADAS POR MODELO', 'ESTATUS SUPUESTO']].head(20))
+                # Tabla de visualización de Fallas vs Simulaciones
+                st.markdown("#### 🏆 Detección de Fallas y Rescates")
+                df_fallas = df_fill[df_fill['ESTATUS REAL'] == "❌ Falla Operativa"]
+                st.dataframe(df_fallas[['ALMACEN', 'NP', 'FECHA SOLICITUD (DIA/MES/AÑO)', 'FECHA ENTREGA (DIA/MES/AÑO)', 'CANTIDAD SOLICITADA', 'CANTIDAD ENTREGADA', 'CANT_REAL_DIA_0', 'PIEZAS_FALTANTES_REALES', 'PIEZAS SALVADAS POR MODELO', 'ESTATUS SUPUESTO']].head(50))
                 
             except Exception as e:
                 st.error(f"❌ Ocurrió un error en la simulación: {e}")
