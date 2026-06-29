@@ -7,11 +7,13 @@ import requests
 from google.oauth2 import service_account
 import google.auth.transport.requests
 
+# ==========================================
+# ⚙️ FUNCIONES AUXILIARES
+# ==========================================
 def normalizar_hora(val):
     """
     Toma cualquier formato de hora de Excel (Texto, AM/PM, decimal o datetime)
     y lo convierte a un formato ESTRICTO de 24 horas: 'HH:MM:SS'.
-    Si está vacío o tiene un error crónico, devuelve '00:00:00'.
     """
     if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
         return "00:00:00"
@@ -89,14 +91,17 @@ def get_auth_headers():
 
 
 def show():
-    st.title("📊 Generador Base Madre Automático: Fill Rate")
-    st.markdown("Extrae los datos de Google Sheets usando el Robot seguro, estandariza columnas y genera la base final para Power BI.")
+    st.title("📊 Master App: Fill Rate & Análisis What-If")
+    st.markdown("Extrae los datos en la nube, estandariza columnas y simula el Fill Rate Supuesto cruzando con el plan de traspasos.")
 
+    # ==========================================
+    # SECCIÓN 1 Y 2: GENERACIÓN BASE MADRE
+    # ==========================================
     st.markdown("### 📚 1. Catálogo Maestro de Refacciones")
     archivo_catalogo = st.file_uploader("Cargar Catálogo Maestro", type=["xlsx", "xls", "csv"], key="cat_maestro")
 
     st.markdown("---")
-    st.markdown("### 🗂️ 2. Extracción Segura en la Nube")
+    st.markdown("### 🗂️ 2. Extracción Segura en la Nube (Base Madre)")
 
     CONSIGNAS_LINKS = {
         "ALMACEN AFN": "https://docs.google.com/spreadsheets/d/1eDMQxTNrAJ3Ak-RLASoQyYmQP_UpubsLSDT3m-K_sIg/export?format=csv&gid=0",
@@ -112,22 +117,11 @@ def show():
         "ALM. UTEP SAN LUIS": "https://docs.google.com/spreadsheets/d/1tdRJEgnmb3Mg8kOhXEAvgPsMQLz60UE6nhLWLV1xk9o/export?format=csv&gid=0"
     }
 
-    # ====================================================================
-    # 🎯 ESTRUCTURA PURA PARA POWER BI (Exactamente 12 columnas)
-    # ====================================================================
     columnas_finales = [
-        "AGENCIA", 
-        "ALMACEN", 
-        "NP", 
-        "DESCR", 
-        "FECHA SOLICITUD (DIA/MES/AÑO)", 
-        "HORA SOLICITUD", 
-        "FECHA ENTREGA (DIA/MES/AÑO)", 
-        "HORA ENTREGA (Formato 24 hrs)", 
-        "DIAS ENTREGA", 
-        "CANTIDAD SOLICITADA", 
-        "CANTIDAD ENTREGADA", 
-        "ESTATUS"
+        "AGENCIA", "ALMACEN", "NP", "DESCR", 
+        "FECHA SOLICITUD (DIA/MES/AÑO)", "HORA SOLICITUD", 
+        "FECHA ENTREGA (DIA/MES/AÑO)", "HORA ENTREGA (Formato 24 hrs)", 
+        "DIAS ENTREGA", "CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "ESTATUS"
     ]
 
     def get_agencia(nombre_almacen):
@@ -135,16 +129,12 @@ def show():
             return "CUAUTITLAN"
         return "TULTITLAN"
 
-    # ==========================================
-    # PROCESAMIENTO DE DATOS
-    # ==========================================
     if st.button("🚀 Extraer Datos con el Robot y Generar Base", type="primary"):
         if not archivo_catalogo:
             st.warning("⚠️ Por favor sube primero el Catálogo Maestro de Refacciones en el paso 1.")
             return
 
         with st.spinner("🤖 El Robot se está conectando a Google Drive..."):
-            
             headers = get_auth_headers()
 
             # Leer Catálogo Maestro
@@ -172,16 +162,12 @@ def show():
 
             for i, (almacen, url) in enumerate(CONSIGNAS_LINKS.items()):
                 agencia = get_agencia(almacen)
-                
                 try:
                     response = requests.get(url, headers=headers)
-                    
                     if response.status_code == 200:
                         df = pd.read_csv(io.StringIO(response.text), skiprows=11)
-                        
                         df.columns = [str(c).strip() for c in df.columns]
                         
-                        # Limpieza de nombres de Excel -> Pandas
                         for col in df.columns:
                             col_upper = col.upper()
                             if "PARTE" in col_upper or "NP" == col_upper:
@@ -198,33 +184,24 @@ def show():
                         if "NP" in df.columns:
                             df = df.dropna(subset=["NP"])
                         
-                        # =========================================================
-                        # 🛡️ FILTROS ESTRICTOS EXCLUSIVOS PARA LIPU Y UTEP
-                        # =========================================================
                         if "CONSIGNA" in df.columns:
                             df["CONSIGNA_UPPER"] = df["CONSIGNA"].astype(str).str.upper()
-                            
                             if almacen == "ALM. LIPU":
                                 df = df[df["CONSIGNA_UPPER"].str.contains("LIPU", na=False)]
                             elif almacen == "ALM. UTEP":
                                 df = df[df["CONSIGNA_UPPER"].str.contains("UTEP", na=False)]
-                                
-                            # OJO: Aquí no borramos la columna Consigna todavía, simplemente la usamos para filtrar
-                        # =========================================================
                         
                         df["AGENCIA"] = agencia
                         df["ALMACEN"] = almacen
 
-                        # Rellenar con nulos si falta alguna de las 12 columnas obligatorias
                         columnas_existentes = [col for col in columnas_finales if col in df.columns]
                         for col_faltante in set(columnas_finales) - set(columnas_existentes):
                             df[col_faltante] = None
 
-                        # ✂️ AQUÍ CORTAMOS LAS COLUMNAS EXTRA (Vale, Consigna, Factura, etc. desaparecen aquí)
                         df_limpio = df[columnas_finales].copy()
                         dataframes_limpios.append(df_limpio)
                     else:
-                        errores.append(f"❌ Acceso Denegado a '{almacen}': El Robot no tiene permisos. HTTP {response.status_code}")
+                        errores.append(f"❌ Acceso Denegado a '{almacen}'. HTTP {response.status_code}")
 
                 except Exception as e:
                     errores.append(f"❌ Error al extraer '{almacen}': {str(e)}")
@@ -234,11 +211,9 @@ def show():
             for err in errores:
                 st.error(err)
 
-            # 4. Consolidar Base Madre
             if dataframes_limpios:
                 df_master = pd.concat(dataframes_limpios, ignore_index=True)
                 
-                # Quitar posibles nulos arrastrados en el NP
                 df_master = df_master.dropna(subset=["NP"])
                 df_master["NP"] = df_master["NP"].astype(str).str.strip()
                 df_master = df_master[df_master["NP"] != ""]
@@ -248,7 +223,6 @@ def show():
                 df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
                 df_master = df_master.drop(columns=['DESCR_OFICIAL'])
 
-                # BLINDAJES MATEMÁTICOS Y DE FECHA
                 columnas_num = ["CANTIDAD SOLICITADA", "CANTIDAD ENTREGADA", "DIAS ENTREGA"]
                 for col in columnas_num:
                     df_master[col] = pd.to_numeric(df_master[col], errors='coerce').fillna(0)
@@ -265,16 +239,161 @@ def show():
                     df_master[col_fecha] = df_master[col_fecha].dt.strftime('%Y-%m-%d')
 
                 st.success(f"✅ ¡Base Madre extraída y blindada con éxito! ({len(df_master)} registros)")
-                st.dataframe(df_master.head(15))
-
+                
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_master.to_excel(writer, index=False, sheet_name='Fact_Fill_Rate')
                 
                 st.download_button(
-                    label="📥 Descargar Base Madre Normalizada (12 Columnas)",
+                    label="📥 Descargar Base Madre Normalizada (Para usar abajo 👇)",
                     data=buffer.getvalue(),
                     file_name="BASE_MADRE_FILL_RATE.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
+
+    st.markdown("---")
+    # ==========================================
+    # SECCIÓN 3: SIMULADOR WHAT-IF
+    # ==========================================
+    st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos)")
+    st.info("Sube la Base Madre de Fill Rate y el archivo de Traspasos Sugeridos para descubrir cuántas fallas se hubieran salvado.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        archivo_fill_rate = st.file_uploader("1️⃣ Base Madre Fill Rate (.xlsx)", type=["xlsx"], key="fill_rate_file")
+    with col2:
+        archivo_traspasos = st.file_uploader("2️⃣ Análisis Consignas (Sugeridos Sábado)", type=["xlsx"], key="traspasos_file")
+
+    if st.button("🎯 Simular Fill Rate Supuesto", type="primary", use_container_width=True):
+        if not archivo_fill_rate or not archivo_traspasos:
+            st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
+            return
+            
+        with st.spinner("🧠 Cruzando dimensiones de inventario y calculando supuestos..."):
+            try:
+                # 1. Cargar Fill Rate
+                df_fill = pd.read_excel(archivo_fill_rate)
+                # Crear datetime para ordenar cronológicamente
+                df_fill['FECHA_HORA_ORDEN'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'] + ' ' + df_fill['HORA SOLICITUD'])
+                df_fill = df_fill.sort_values('FECHA_HORA_ORDEN')
+                
+                # 2. Determinar Estatus Real
+                def calcular_estatus_real(row):
+                    if (str(row['FECHA SOLICITUD (DIA/MES/AÑO)']) != str(row['FECHA ENTREGA (DIA/MES/AÑO)']) 
+                        or row['DIAS ENTREGA'] > 0 
+                        or float(row['CANTIDAD ENTREGADA']) < float(row['CANTIDAD SOLICITADA'])):
+                        return "MAL"
+                    return "BIEN"
+                
+                df_fill['ESTATUS REAL (HOY)'] = df_fill.apply(calcular_estatus_real, axis=1)
+
+                # 3. Cargar Base de Traspasos Inteligente
+                # Buscamos la fila donde empiezan los encabezados de verdad
+                df_t_raw = pd.read_excel(archivo_traspasos, sheet_name="CONSIGNAS", header=None)
+                header_idx = 0
+                for i, row in df_t_raw.iterrows():
+                    row_str = str(row.values).upper()
+                    if "N° DE PARTE" in row_str or "NP" in row_str:
+                        header_idx = i
+                        break
+                
+                df_traspasos = pd.read_excel(archivo_traspasos, sheet_name="CONSIGNAS", header=header_idx)
+                
+                # 4. Crear Inventario Supuesto (Diccionario)
+                inventario_supuesto = {}
+                almacenes_disponibles = df_fill['ALMACEN'].unique()
+                
+                # Encontramos qué columnas corresponden a almacenes
+                cols_almacenes = [c for c in df_traspasos.columns if str(c).strip() in almacenes_disponibles]
+                
+                for _, row in df_traspasos.iterrows():
+                    np_val = str(row.get('N° DE PARTE', row.get('NP', ''))).strip()
+                    if np_val == 'nan' or np_val == '': continue
+                    
+                    for alm in cols_almacenes:
+                        val = row[alm]
+                        try:
+                            val = float(val)
+                            # Si es negativo, significa déficit en consigna (es lo que sugeriste traspasar)
+                            if val < 0:
+                                inventario_supuesto[(alm.strip(), np_val)] = abs(val)
+                        except:
+                            pass
+                            
+                # 5. La Simulación (Viaje en el tiempo)
+                estatus_supuesto = []
+                inventario_usado = []
+                
+                for idx, row in df_fill.iterrows():
+                    np_val = str(row['NP']).strip()
+                    almacen = str(row['ALMACEN']).strip()
+                    cant_sol = float(row['CANTIDAD SOLICITADA'])
+                    cant_ent = float(row['CANTIDAD ENTREGADA'])
+                    estatus_real = row['ESTATUS REAL (HOY)']
+                    
+                    llave = (almacen, np_val)
+                    
+                    if estatus_real == "MAL":
+                        # Calculamos cuánto faltó
+                        if row['DIAS ENTREGA'] > 0 or row['FECHA SOLICITUD (DIA/MES/AÑO)'] != row['FECHA ENTREGA (DIA/MES/AÑO)']:
+                            faltante = cant_sol # Entregó tarde, faltó todo el día que lo pidió
+                        else:
+                            faltante = cant_sol - cant_ent # Entrega parcial
+                            
+                        inv_disponible = inventario_supuesto.get(llave, 0)
+                        
+                        if inv_disponible >= faltante:
+                            estatus_supuesto.append("✅ BIEN (Salvado por Traspaso)")
+                            inventario_supuesto[llave] -= faltante
+                            inventario_usado.append(faltante)
+                        else:
+                            estatus_supuesto.append("❌ MAL (Aun con traspasos no alcanzaba)")
+                            inventario_usado.append(inv_disponible)
+                            inventario_supuesto[llave] = 0 # Se agotó el inventario virtual
+                    else:
+                        estatus_supuesto.append("✅ BIEN (Mismo Día)")
+                        inventario_usado.append(0)
+
+                # Insertar columnas finales
+                df_fill['ESTATUS SUPUESTO (CON MODELO)'] = estatus_supuesto
+                df_fill['PIEZAS SALVADAS POR MODELO'] = inventario_usado
+                
+                # Limpiar columna de apoyo
+                df_fill = df_fill.drop(columns=['FECHA_HORA_ORDEN'])
+
+                # Métricas Rápidas
+                total_solicitudes = len(df_fill)
+                entregas_bien_real = len(df_fill[df_fill['ESTATUS REAL (HOY)'] == 'BIEN'])
+                entregas_bien_supuesto = len(df_fill[df_fill['ESTATUS SUPUESTO (CON MODELO)'].str.contains('✅ BIEN')])
+                
+                fr_real = (entregas_bien_real / total_solicitudes) * 100
+                fr_supuesto = (entregas_bien_supuesto / total_solicitudes) * 100
+                
+                st.success("✅ ¡Simulación Completada!")
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Fill Rate Real (Hoy)", f"{fr_real:.1f}%")
+                m2.metric("Fill Rate Supuesto", f"{fr_supuesto:.1f}%", f"+{(fr_supuesto - fr_real):.1f}%")
+                m3.metric("Fallas Salvadas", f"{entregas_bien_supuesto - entregas_bien_real} entregas")
+
+                # Botón de Descarga para Power BI
+                buffer_bi = io.BytesIO()
+                with pd.ExcelWriter(buffer_bi, engine='openpyxl') as writer:
+                    df_fill.to_excel(writer, index=False, sheet_name='Simulacion_WhatIf')
+                
+                st.download_button(
+                    label="📊 Descargar Base Lista para Power BI (Simulada)",
+                    data=buffer_bi.getvalue(),
+                    file_name="BASE_FILL_RATE_WHAT_IF.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+                
+                st.dataframe(df_fill[['ALMACEN', 'NP', 'CANTIDAD SOLICITADA', 'ESTATUS REAL (HOY)', 'ESTATUS SUPUESTO (CON MODELO)']].head(20))
+                
+            except Exception as e:
+                st.error(f"❌ Ocurrió un error en la simulación: {e}")
+
+if __name__ == "__main__":
+    show()
