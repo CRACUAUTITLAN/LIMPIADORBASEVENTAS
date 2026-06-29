@@ -137,7 +137,6 @@ def show():
         with st.spinner("🤖 El Robot se está conectando a Google Drive..."):
             headers = get_auth_headers()
 
-            # Leer Catálogo Maestro
             try:
                 if archivo_catalogo.name.endswith('.csv'):
                     df_cat = pd.read_csv(archivo_catalogo)
@@ -253,8 +252,7 @@ def show():
                 )
 
     st.markdown("---")
-    
-   # ==========================================
+    # ==========================================
     # SECCIÓN 3: SIMULADOR WHAT-IF (BASADO EN PIEZAS Y FILL RATE REAL)
     # ==========================================
     st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos por Sucursal)")
@@ -279,6 +277,12 @@ def show():
                 df_fill = pd.read_excel(archivo_fill_rate)
                 df_fill['FECHA_HORA_ORDEN'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'].astype(str) + ' ' + df_fill['HORA SOLICITUD'].astype(str), errors='coerce')
                 
+                # Blindaje de Fechas Nulas
+                df_fill = df_fill.dropna(subset=['FECHA_HORA_ORDEN']) 
+
+                # Blindaje Columna de Cantidades
+                df_fill['CANTIDAD SOLICITADA'] = pd.to_numeric(df_fill['CANTIDAD SOLICITADA'], errors='coerce').fillna(0)
+                
                 # 2. FILTRO MAESTRO DE FECHA
                 fecha_corte = pd.to_datetime(fecha_reporte).date()
                 df_fill = df_fill[df_fill['FECHA_HORA_ORDEN'].dt.date > fecha_corte].copy()
@@ -293,7 +297,6 @@ def show():
                 def calcular_entregado_dia_0(row):
                     try:
                         dias = float(row.get('DIAS ENTREGA', 0))
-                        # Si entregó el mismo día, cuenta lo entregado. Si no, cuenta 0 para ese día.
                         if dias == 0:
                             return float(row.get('CANTIDAD ENTREGADA', 0))
                         else:
@@ -305,7 +308,6 @@ def show():
                 df_fill['PIEZAS_FALTANTES_REALES'] = df_fill['CANTIDAD SOLICITADA'].astype(float) - df_fill['CANT_REAL_DIA_0']
 
                 # 4. Cargar Base de Traspasos (El Fondo de Rescate)
-                # Aquí calcularemos CUÁNTAS piezas extra llegaron el lunes gracias a tu reporte
                 stock_rescate_modelo = {}
                 xls_traspasos = pd.ExcelFile(archivo_traspasos)
                 
@@ -347,8 +349,6 @@ def show():
                             except:
                                 existencia = 0
                                 
-                            # EL RESCATE: ¿Cuántas piezas llegaron físicas por hacerte caso?
-                            # Si meta era 5 y había 2, traspasaron 3. El "fondo de rescate" tiene 3.
                             piezas_traspasadas = max(0.0, meta - existencia)
                             stock_rescate_modelo[(almacen, np_val)] = piezas_traspasadas
                             
@@ -365,13 +365,12 @@ def show():
                     llave = (almacen, np_val)
                     disp_rescate = stock_rescate_modelo.get(llave, 0)
                     
-                    if faltante > 0:
-                        # Rescatamos lo más que podamos con el stock sugerido
+                    # AQUÍ ESTÁ LA CORRECCIÓN EXACTA QUE INCLUYE LOS FALTANTES "NO SALVADOS"
+                    if faltante > 0 and disp_rescate > 0:
                         piezas_salvadas = min(faltante, disp_rescate)
-                        # Restamos del stock de rescate para que no se use infinitamente
                         stock_rescate_modelo[llave] -= piezas_salvadas
                     else:
-                        piezas_salvadas = 0.0
+                        piezas_salvadas = 0.0 # Se registra la fila, pero con 0 piezas salvadas.
 
                     piezas_salvadas_list.append(piezas_salvadas)
                     cant_supuesta_dia_0.append(real_dia_0 + piezas_salvadas)
@@ -383,7 +382,7 @@ def show():
                 # Estatus para tabla resumen
                 df_fill['ESTATUS SUPUESTO'] = df_fill.apply(
                     lambda x: "✅ SALVADO AL 100%" if x['PIEZAS SALVADAS POR MODELO'] == x['PIEZAS_FALTANTES_REALES'] and x['PIEZAS_FALTANTES_REALES'] > 0
-                    else ("⚠️ SALVADO PARCIAL" if x['PIEZAS SALVADAS POR MODELO'] > 0 else "❌ NO SALVADO"), axis=1
+                    else ("⚠️ SALVADO PARCIAL" if x['PIEZAS SALVADAS POR MODELO'] > 0 else ("✅ BIEN (Mismo día)" if x['PIEZAS_FALTANTES_REALES'] == 0 else "❌ NO SALVADO")), axis=1
                 )
 
                 df_fill = df_fill.drop(columns=['FECHA_HORA_ORDEN'])
@@ -426,3 +425,6 @@ def show():
                 
             except Exception as e:
                 st.error(f"❌ Ocurrió un error en la simulación: {e}")
+
+if __name__ == "__main__":
+    show()
