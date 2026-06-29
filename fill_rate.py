@@ -254,11 +254,11 @@ def show():
 
     st.markdown("---")
     
-    # ==========================================
-    # SECCIÓN 3: SIMULADOR WHAT-IF (MEJORADO)
+   # ==========================================
+    # SECCIÓN 3: SIMULADOR WHAT-IF (BASADO EN PIEZAS Y FILL RATE REAL)
     # ==========================================
     st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos por Sucursal)")
-    st.info("Cruza el Fill Rate con tu plan de traspasos. Se simulará el stock sugerido según la DEMANDA (Alta, Media, Baja) por cada almacén.")
+    st.info("Calcula el Fill Rate por PIEZAS. Las piezas sugeridas por el modelo salvarán entregas parciales o tardías.")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -273,13 +273,13 @@ def show():
             st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
             return
             
-        with st.spinner("🧠 Leyendo pestañas de almacenes y viajando en el tiempo..."):
+        with st.spinner("🧠 Calculando volúmenes de piezas, rescates e inyectando traspasos..."):
             try:
                 # 1. Cargar Fill Rate y crear línea de tiempo
                 df_fill = pd.read_excel(archivo_fill_rate)
                 df_fill['FECHA_HORA_ORDEN'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'].astype(str) + ' ' + df_fill['HORA SOLICITUD'].astype(str), errors='coerce')
                 
-                # 2. FILTRO MAESTRO DE FECHA (Solo solicitudes DESPUÉS del sábado de reporte)
+                # 2. FILTRO MAESTRO DE FECHA
                 fecha_corte = pd.to_datetime(fecha_reporte).date()
                 df_fill = df_fill[df_fill['FECHA_HORA_ORDEN'].dt.date > fecha_corte].copy()
                 
@@ -289,18 +289,24 @@ def show():
 
                 df_fill = df_fill.sort_values('FECHA_HORA_ORDEN')
                 
-                # 3. Determinar Estatus Real
-                def calcular_estatus_real(row):
-                    if (str(row['FECHA SOLICITUD (DIA/MES/AÑO)']) != str(row['FECHA ENTREGA (DIA/MES/AÑO)']) 
-                        or float(row.get('DIAS ENTREGA', 0)) > 0 
-                        or float(row['CANTIDAD ENTREGADA']) < float(row['CANTIDAD SOLICITADA'])):
-                        return "MAL"
-                    return "BIEN"
-                
-                df_fill['ESTATUS REAL (HOY)'] = df_fill.apply(calcular_estatus_real, axis=1)
+                # 3. Matemática de Piezas Reales (El Fill Rate Hoy)
+                def calcular_entregado_dia_0(row):
+                    try:
+                        dias = float(row.get('DIAS ENTREGA', 0))
+                        # Si entregó el mismo día, cuenta lo entregado. Si no, cuenta 0 para ese día.
+                        if dias == 0:
+                            return float(row.get('CANTIDAD ENTREGADA', 0))
+                        else:
+                            return 0.0
+                    except:
+                        return 0.0
+                        
+                df_fill['CANT_REAL_DIA_0'] = df_fill.apply(calcular_entregado_dia_0, axis=1)
+                df_fill['PIEZAS_FALTANTES_REALES'] = df_fill['CANTIDAD SOLICITADA'].astype(float) - df_fill['CANT_REAL_DIA_0']
 
-                # 4. Cargar Base de Traspasos Inteligente (Por Hojas/Almacenes)
-                inventario_supuesto = {}
+                # 4. Cargar Base de Traspasos (El Fondo de Rescate)
+                # Aquí calcularemos CUÁNTAS piezas extra llegaron el lunes gracias a tu reporte
+                stock_rescate_modelo = {}
                 xls_traspasos = pd.ExcelFile(archivo_traspasos)
                 
                 almacenes_objetivo = [
@@ -314,7 +320,6 @@ def show():
                     if almacen in xls_traspasos.sheet_names:
                         df_alm = pd.read_excel(xls_traspasos, sheet_name=almacen)
                         
-                        # Buscar dinámicamente la fila de encabezados
                         header_idx = 0
                         for i, row in df_alm.iterrows():
                             if "N° DE PARTE" in str(row.values).upper() or "NP" in str(row.values).upper():
@@ -324,102 +329,100 @@ def show():
                         if header_idx > 0:
                             df_alm = pd.read_excel(xls_traspasos, sheet_name=almacen, header=header_idx)
                         
-                        # Construir el inventario virtual del lunes
                         for _, row in df_alm.iterrows():
                             np_val = str(row.get('N° DE PARTE', row.get('NP', ''))).strip()
                             if np_val in ('nan', '', 'None'): continue
                             
                             demanda = str(row.get('DEMANDA', '')).strip().upper()
                             
-                            # Leer la meta según la demanda
                             try:
-                                if demanda == 'ALTA':
-                                    meta = float(row.get('ALTA (1.5)', 0))
-                                elif demanda == 'MEDIA':
-                                    meta = float(row.get('MEDIA (1)', 0))
-                                else:
-                                    meta = float(row.get('BAJA (0)', 0))
+                                if demanda == 'ALTA': meta = float(row.get('ALTA (1.5)', 0))
+                                elif demanda == 'MEDIA': meta = float(row.get('MEDIA (1)', 0))
+                                else: meta = float(row.get('BAJA (0)', 0))
                             except:
                                 meta = 0
                                 
-                            # Leer inventario que ya tenían
                             try:
                                 existencia = float(row.get('INVENTARIO EXISTENCIA', 0))
                             except:
                                 existencia = 0
                                 
-                            # El stock del lunes es lo que ya tenían o lo que sugeriste, lo que sea mayor.
-                            stock_lunes = max(meta, existencia)
-                            inventario_supuesto[(almacen, np_val)] = stock_lunes
+                            # EL RESCATE: ¿Cuántas piezas llegaron físicas por hacerte caso?
+                            # Si meta era 5 y había 2, traspasaron 3. El "fondo de rescate" tiene 3.
+                            piezas_traspasadas = max(0.0, meta - existencia)
+                            stock_rescate_modelo[(almacen, np_val)] = piezas_traspasadas
                             
-                # 5. La Simulación (Viaje en el tiempo descontando stock)
-                estatus_supuesto = []
-                inventario_usado = []
+                # 5. La Simulación (Rescatando faltantes)
+                piezas_salvadas_list = []
+                cant_supuesta_dia_0 = []
                 
                 for idx, row in df_fill.iterrows():
                     np_val = str(row['NP']).strip()
                     almacen = str(row['ALMACEN']).strip()
-                    cant_sol = float(row['CANTIDAD SOLICITADA'])
-                    estatus_real = row['ESTATUS REAL (HOY)']
+                    faltante = row['PIEZAS_FALTANTES_REALES']
+                    real_dia_0 = row['CANT_REAL_DIA_0']
                     
                     llave = (almacen, np_val)
-                    inv_disponible = inventario_supuesto.get(llave, 0)
+                    disp_rescate = stock_rescate_modelo.get(llave, 0)
                     
-                    # Cobramos la pieza al inventario virtual
-                    if estatus_real == "MAL":
-                        if inv_disponible >= cant_sol:
-                            estatus_supuesto.append("✅ BIEN (Salvado por Traspaso)")
-                            inventario_supuesto[llave] -= cant_sol
-                            inventario_usado.append(cant_sol)
-                        else:
-                            estatus_supuesto.append("❌ MAL (Aun con traspasos no alcanzaba)")
-                            inventario_usado.append(inv_disponible)
-                            inventario_supuesto[llave] = 0 # Se agota
+                    if faltante > 0:
+                        # Rescatamos lo más que podamos con el stock sugerido
+                        piezas_salvadas = min(faltante, disp_rescate)
+                        # Restamos del stock de rescate para que no se use infinitamente
+                        stock_rescate_modelo[llave] -= piezas_salvadas
                     else:
-                        # Si en la vida real sí se entregó BIEN, también debe descontarse del virtual
-                        estatus_supuesto.append("✅ BIEN (Mismo Día)")
-                        inventario_supuesto[llave] = max(0, inv_disponible - cant_sol)
-                        inventario_usado.append(0)
+                        piezas_salvadas = 0.0
 
-                # Insertar columnas finales
-                df_fill['ESTATUS SUPUESTO (CON MODELO)'] = estatus_supuesto
-                df_fill['PIEZAS SALVADAS POR MODELO'] = inventario_usado
+                    piezas_salvadas_list.append(piezas_salvadas)
+                    cant_supuesta_dia_0.append(real_dia_0 + piezas_salvadas)
+
+                # Insertar columnas para Power BI
+                df_fill['PIEZAS SALVADAS POR MODELO'] = piezas_salvadas_list
+                df_fill['CANT_SUPUESTA_DIA_0'] = cant_supuesta_dia_0
                 
-                # Limpiar columnas de apoyo
+                # Estatus para tabla resumen
+                df_fill['ESTATUS SUPUESTO'] = df_fill.apply(
+                    lambda x: "✅ SALVADO AL 100%" if x['PIEZAS SALVADAS POR MODELO'] == x['PIEZAS_FALTANTES_REALES'] and x['PIEZAS_FALTANTES_REALES'] > 0
+                    else ("⚠️ SALVADO PARCIAL" if x['PIEZAS SALVADAS POR MODELO'] > 0 else "❌ NO SALVADO"), axis=1
+                )
+
                 df_fill = df_fill.drop(columns=['FECHA_HORA_ORDEN'])
 
-                # Métricas Rápidas
-                total_solicitudes = len(df_fill)
-                entregas_bien_real = len(df_fill[df_fill['ESTATUS REAL (HOY)'] == 'BIEN'])
-                entregas_bien_supuesto = len(df_fill[df_fill['ESTATUS SUPUESTO (CON MODELO)'].str.contains('✅ BIEN')])
+                # ==========================================
+                # MÉTRICAS ESTRICTAS POR PIEZAS
+                # ==========================================
+                total_piezas_solicitadas = df_fill['CANTIDAD SOLICITADA'].sum()
+                total_piezas_entregadas_reales = df_fill['CANT_REAL_DIA_0'].sum()
+                total_piezas_salvadas = sum(piezas_salvadas_list)
+                total_piezas_entregadas_supuesto = sum(cant_supuesta_dia_0)
                 
-                fr_real = (entregas_bien_real / total_solicitudes) * 100 if total_solicitudes > 0 else 0
-                fr_supuesto = (entregas_bien_supuesto / total_solicitudes) * 100 if total_solicitudes > 0 else 0
+                fr_real = (total_piezas_entregadas_reales / total_piezas_solicitadas * 100) if total_piezas_solicitadas > 0 else 0
+                fr_supuesto = (total_piezas_entregadas_supuesto / total_piezas_solicitadas * 100) if total_piezas_solicitadas > 0 else 0
                 
-                st.success(f"✅ ¡Simulación Completada! (Se analizaron {total_solicitudes} solicitudes desde el {fecha_corte})")
+                st.success(f"✅ ¡Simulación Completada! (Basada en el volumen de {int(total_piezas_solicitadas)} piezas solicitadas)")
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Fill Rate Real", f"{fr_real:.1f}%")
-                m2.metric("Fill Rate Supuesto", f"{fr_supuesto:.1f}%", f"+{(fr_supuesto - fr_real):.1f}%")
-                m3.metric("Fallas Salvadas", f"{entregas_bien_supuesto - entregas_bien_real} entregas")
+                m1.metric("Fill Rate Real (Piezas)", f"{fr_real:.1f}%", f"{int(total_piezas_entregadas_reales)} pzs a tiempo")
+                m2.metric("Fill Rate Supuesto", f"{fr_supuesto:.1f}%", f"+{(fr_supuesto - fr_real):.1f}% de Mejora")
+                m3.metric("Piezas Salvadas por tu Modelo", f"{int(total_piezas_salvadas)} piezas")
 
                 # Botón de Descarga para Power BI
                 buffer_bi = io.BytesIO()
                 with pd.ExcelWriter(buffer_bi, engine='openpyxl') as writer:
-                    df_fill.to_excel(writer, index=False, sheet_name='Simulacion_WhatIf')
+                    df_fill.to_excel(writer, index=False, sheet_name='Simulacion_WhatIf_Piezas')
                 
                 st.download_button(
-                    label="📊 Descargar Base Lista para Power BI (Simulada)",
+                    label="📊 Descargar Base Lista para Power BI (Simulada por Piezas)",
                     data=buffer_bi.getvalue(),
                     file_name=f"BASE_FILL_RATE_WHAT_IF_{fecha_corte}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
                 
-                # Tabla resumen de Salvados
-                st.markdown("#### 🏆 Resumen de Entregas Salvadas por el Modelo")
-                df_salvados = df_fill[df_fill['ESTATUS SUPUESTO (CON MODELO)'] == "✅ BIEN (Salvado por Traspaso)"]
-                st.dataframe(df_salvados[['ALMACEN', 'NP', 'DESCR', 'FECHA SOLICITUD (DIA/MES/AÑO)', 'CANTIDAD SOLICITADA']])
+                # Tabla resumen para comprobar la magia
+                st.markdown("#### 🏆 Resumen de Piezas Rescatadas")
+                df_rescatados = df_fill[df_fill['PIEZAS SALVADAS POR MODELO'] > 0]
+                st.dataframe(df_rescatados[['ALMACEN', 'NP', 'CANTIDAD SOLICITADA', 'CANT_REAL_DIA_0', 'PIEZAS_FALTANTES_REALES', 'PIEZAS SALVADAS POR MODELO', 'ESTATUS SUPUESTO']])
                 
             except Exception as e:
                 st.error(f"❌ Ocurrió un error en la simulación: {e}")
