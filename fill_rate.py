@@ -11,21 +11,14 @@ import google.auth.transport.requests
 # ⚙️ FUNCIONES AUXILIARES
 # ==========================================
 def normalizar_hora(val):
-    """
-    Toma cualquier formato de hora de Excel (Texto, AM/PM, decimal o datetime)
-    y lo convierte a un formato ESTRICTO de 24 horas: 'HH:MM:SS'.
-    """
     if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
         return "00:00:00"
-    
     if isinstance(val, (pd.Timestamp, datetime.time, datetime.datetime)):
         try:
             return val.strftime('%H:%M:%S')
         except:
             pass
-
     val_str = str(val).strip().lower()
-    
     if " " in val_str and (":" in val_str.split(" ")[1] or "m" in val_str):
         partes_espacio = val_str.split(" ")
         for parte in partes_espacio:
@@ -34,13 +27,10 @@ def normalizar_hora(val):
                 if "a" in val_str or "p" in val_str:
                     val_str += " pm" if "p" in str(val).lower() else " am"
                 break
-
     es_pm = False
     if "p" in val_str:
         es_pm = True
-    
     hora_limpia = re.sub(r'[^0-9:]', '', val_str)
-    
     if not hora_limpia or ":" not in hora_limpia:
         try:
             total_seconds = int(float(val_str) * 86400)
@@ -50,32 +40,26 @@ def normalizar_hora(val):
             return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         except:
             return "00:00:00"
-
     partes = hora_limpia.split(":")
     try:
         h = int(partes[0])
         m = int(partes[1]) if len(partes) > 1 else 0
         s = int(partes[2]) if len(partes) > 2 else 0
-        
         if es_pm and h < 12:
             h += 12
         elif not es_pm and h == 12:
             h = 0
-            
         if h >= 24 or m >= 60 or s >= 60:
             return "00:00:00"
-            
         return f"{h:02d}:{m:02d}:{s:02d}"
     except:
         return "00:00:00"
-
 
 # ==========================================
 # 🤖 AUTENTICACIÓN DEL ROBOT
 # ==========================================
 @st.cache_resource
 def get_auth_headers():
-    """Obtiene el token de seguridad del Robot para entrar a Google Drive"""
     try:
         gcp_creds = dict(st.secrets["gcp_service_account"])
         creds = service_account.Credentials.from_service_account_info(
@@ -89,10 +73,9 @@ def get_auth_headers():
         st.error(f"⚠️ Error al conectar el Robot con Google: {e}")
         st.stop()
 
-
 def show():
-    st.title("📊 Master App: Fill Rate & Análisis What-If")
-    st.markdown("Extrae los datos en la nube, estandariza columnas y simula el Fill Rate Supuesto cruzando con el plan de traspasos.")
+    st.title("📊 Master App: Fill Rate & Análisis What-If (Kardex Virtual)")
+    st.markdown("Extrae los datos en la nube, estandariza y simula el consumo del stock fila por fila.")
 
     # ==========================================
     # SECCIÓN 1 Y 2: GENERACIÓN BASE MADRE
@@ -131,25 +114,21 @@ def show():
 
     if st.button("🚀 Extraer Datos con el Robot y Generar Base", type="primary"):
         if not archivo_catalogo:
-            st.warning("⚠️ Por favor sube primero el Catálogo Maestro de Refacciones en el paso 1.")
+            st.warning("⚠️ Por favor sube primero el Catálogo Maestro de Refacciones.")
             return
 
         with st.spinner("🤖 El Robot se está conectando a Google Drive..."):
             headers = get_auth_headers()
-
             try:
                 if archivo_catalogo.name.endswith('.csv'):
                     df_cat = pd.read_csv(archivo_catalogo)
                 else:
                     df_cat = pd.read_excel(archivo_catalogo)
-                
                 df_cat.columns = [str(col).strip().upper() for col in df_cat.columns]
                 col_descr_cat = "DESCRIPCION" if "DESCRIPCION" in df_cat.columns else "DESCRIPCIÓN"
-                
                 df_cat = df_cat[['NP', col_descr_cat]].drop_duplicates(subset=['NP'])
                 df_cat['NP'] = df_cat['NP'].astype(str).str.strip()
                 df_cat = df_cat.rename(columns={col_descr_cat: "DESCR_OFICIAL"})
-                
             except Exception as e:
                 st.error(f"❌ Error al procesar el Catálogo Maestro: {e}")
                 return
@@ -166,7 +145,6 @@ def show():
                     if response.status_code == 200:
                         df = pd.read_csv(io.StringIO(response.text), skiprows=11)
                         df.columns = [str(c).strip() for c in df.columns]
-                        
                         for col in df.columns:
                             col_upper = col.upper()
                             if "PARTE" in col_upper or "NP" == col_upper:
@@ -179,32 +157,25 @@ def show():
                                 df = df.rename(columns={col: "FECHA ENTREGA (DIA/MES/AÑO)"})
                             elif "HORA ENT" in col_upper:
                                 df = df.rename(columns={col: "HORA ENTREGA (Formato 24 hrs)"})
-                        
                         if "NP" in df.columns:
                             df = df.dropna(subset=["NP"])
-                        
                         if "CONSIGNA" in df.columns:
                             df["CONSIGNA_UPPER"] = df["CONSIGNA"].astype(str).str.upper()
                             if almacen == "ALM. LIPU":
                                 df = df[df["CONSIGNA_UPPER"].str.contains("LIPU", na=False)]
                             elif almacen == "ALM. UTEP":
                                 df = df[df["CONSIGNA_UPPER"].str.contains("UTEP", na=False)]
-                        
                         df["AGENCIA"] = agencia
                         df["ALMACEN"] = almacen
-
                         columnas_existentes = [col for col in columnas_finales if col in df.columns]
                         for col_faltante in set(columnas_finales) - set(columnas_existentes):
                             df[col_faltante] = None
-
                         df_limpio = df[columnas_finales].copy()
                         dataframes_limpios.append(df_limpio)
                     else:
                         errores.append(f"❌ Acceso Denegado a '{almacen}'. HTTP {response.status_code}")
-
                 except Exception as e:
                     errores.append(f"❌ Error al extraer '{almacen}': {str(e)}")
-                
                 barra.progress((i + 1) / total_links)
 
             for err in errores:
@@ -212,12 +183,10 @@ def show():
 
             if dataframes_limpios:
                 df_master = pd.concat(dataframes_limpios, ignore_index=True)
-                
                 df_master = df_master.dropna(subset=["NP"])
                 df_master["NP"] = df_master["NP"].astype(str).str.strip()
                 df_master = df_master[df_master["NP"] != ""]
                 df_master = df_master[df_master["NP"].str.lower() != "nan"]
-
                 df_master = df_master.merge(df_cat, on='NP', how='left')
                 df_master['DESCR'] = df_master['DESCR_OFICIAL'].fillna("X DEFINIR")
                 df_master = df_master.drop(columns=['DESCR_OFICIAL'])
@@ -237,12 +206,10 @@ def show():
                     df_master[col_fecha] = df_master[col_fecha].fillna(pd.Timestamp('2026-01-01'))
                     df_master[col_fecha] = df_master[col_fecha].dt.strftime('%Y-%m-%d')
 
-                st.success(f"✅ ¡Base Madre extraída y blindada con éxito! ({len(df_master)} registros)")
-                
+                st.success(f"✅ ¡Base Madre extraída con éxito! ({len(df_master)} registros)")
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                     df_master.to_excel(writer, index=False, sheet_name='Fact_Fill_Rate')
-                
                 st.download_button(
                     label="📥 Descargar Base Madre Normalizada (Para usar abajo 👇)",
                     data=buffer.getvalue(),
@@ -253,10 +220,10 @@ def show():
 
     st.markdown("---")
     # ==========================================
-    # SECCIÓN 3: SIMULADOR WHAT-IF (LÓGICA COMBINADA FECHA + VOLUMEN)
+    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX VIRTUAL ROW-BY-ROW)
     # ==========================================
-    st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos por Sucursal)")
-    st.info("Detecta fallas operativas (Entregas tardías o incompletas) y simula el rescate si el Almacén hubiera tenido el stock que dictaba el Modelo.")
+    st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos fila por fila)")
+    st.info("Visualiza el consumo del stock paso a paso. Perfecto para auditar el desempeño del modelo en Power BI.")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -264,62 +231,40 @@ def show():
     with col2:
         archivo_traspasos = st.file_uploader("2️⃣ Análisis Consignas (Reporte Sábado)", type=["xlsx"], key="traspasos_file")
     with col3:
-        fecha_reporte = st.date_input("📅 Fecha del Reporte (Sábado):", help="Solo se evaluarán solicitudes posteriores a esta fecha.")
+        fecha_reporte = st.date_input("📅 Fecha del Reporte (Sábado):")
 
-    if st.button("🎯 Simular Fill Rate Supuesto", type="primary", use_container_width=True):
+    if st.button("🎯 Simular Kardex y Fill Rate", type="primary", use_container_width=True):
         if not archivo_fill_rate or not archivo_traspasos:
             st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
             return
             
-        with st.spinner("🧠 Evaluando Tiempos de Entrega, Cantidades y cruzando con el Plan Maestro..."):
+        with st.spinner("🧠 Reconstruyendo la línea de tiempo y descontando el inventario..."):
             try:
-                # 1. Cargar Fill Rate y crear línea de tiempo
+                # 1. Cargar Fill Rate y crear línea de tiempo cronológica
                 df_fill = pd.read_excel(archivo_fill_rate)
-                df_fill['FECHA_HORA_ORDEN'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'].astype(str) + ' ' + df_fill['HORA SOLICITUD'].astype(str), errors='coerce')
+                df_fill['FECHA_SOL_DT'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'], errors='coerce')
+                df_fill['FECHA_ENT_DT'] = pd.to_datetime(df_fill['FECHA ENTREGA (DIA/MES/AÑO)'], errors='coerce')
                 
-                # Blindajes de datos nulos o mal formateados
+                # Crear clave cronológica para procesar fila por fila de forma ordenada
+                df_fill['FECHA_HORA_ORDEN'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'].astype(str) + ' ' + df_fill['HORA SOLICITUD'].astype(str), errors='coerce')
                 df_fill = df_fill.dropna(subset=['FECHA_HORA_ORDEN']) 
+                
                 df_fill['CANTIDAD SOLICITADA'] = pd.to_numeric(df_fill['CANTIDAD SOLICITADA'], errors='coerce').fillna(0).astype(float)
                 df_fill['CANTIDAD ENTREGADA'] = pd.to_numeric(df_fill['CANTIDAD ENTREGADA'], errors='coerce').fillna(0).astype(float)
                 
-                # 2. FILTRO MAESTRO DE FECHA (Posteriores al sábado del reporte)
+                # Filtro de fecha para evaluar lo que pasó después del sábado de reporte
                 fecha_corte = pd.to_datetime(fecha_reporte).date()
                 df_fill = df_fill[df_fill['FECHA_HORA_ORDEN'].dt.date > fecha_corte].copy()
                 
                 if df_fill.empty:
-                    st.error("❌ No hay solicitudes de Fill Rate posteriores a la fecha seleccionada. Revisa la fecha.")
+                    st.error("❌ No hay solicitudes posteriores a la fecha seleccionada.")
                     return
 
+                # ORDEN CRONOLÓGICO INDISPENSABLE PARA DRENAR STOCK
                 df_fill = df_fill.sort_values('FECHA_HORA_ORDEN')
-                
-                # =========================================================================================
-                # 3. EL CORAZÓN DEL CÁLCULO: Evaluar fallas (Tarde o Incompleto)
-                # =========================================================================================
-                def calcular_entregas_efectivas_dia_0(row):
-                    cant_entregada = float(row.get('CANTIDAD ENTREGADA', 0))
-                    fecha_sol = str(row.get('FECHA SOLICITUD (DIA/MES/AÑO)', '')).strip()
-                    fecha_ent = str(row.get('FECHA ENTREGA (DIA/MES/AÑO)', '')).strip()
-                    
-                    # REGLA 1: Si la fecha de entrega es distinta (Días > 0), el Fill Rate efectivo de ese día fue 0.
-                    if fecha_sol != fecha_ent:
-                        return 0.0
-                    
-                    # REGLA 2: Si se entregó el mismo día, tomamos lo que se haya entregado (completo o parcial).
-                    return cant_entregada
 
-                # Calculamos cuánto se entregó REALMENTE sin fallar en tiempo
-                df_fill['CANT_REAL_DIA_0'] = df_fill.apply(calcular_entregas_efectivas_dia_0, axis=1)
-                
-                # Calculamos el faltante exacto que el modelo de traspasos debe intentar rescatar
-                df_fill['PIEZAS_FALTANTES_REALES'] = (df_fill['CANTIDAD SOLICITADA'] - df_fill['CANT_REAL_DIA_0']).clip(lower=0)
-
-                # Etiqueta visual para que lo identifiques rápido en la tabla
-                df_fill['ESTATUS REAL'] = df_fill['PIEZAS_FALTANTES_REALES'].apply(lambda x: "❌ Falla Operativa" if x > 0 else "✅ Entrega Correcta")
-
-                # =========================================================================================
-                # 4. Cargar Base de Traspasos (Meta de Stock del Modelo)
-                # =========================================================================================
-                stock_rescate_modelo = {}
+                # 2. Cargar Base de Traspasos (Meta de Stock del Modelo)
+                inventario_virtual = {}
                 xls_traspasos = pd.ExcelFile(archivo_traspasos)
                 
                 almacenes_objetivo = [
@@ -328,120 +273,116 @@ def show():
                     "CULVERT", "IDEALEASE", "TDR", "TUMSA"
                 ]
 
-                # Leer pestaña por pestaña de almacenes
+                # Leer inventario sugerido pestaña por pestaña
                 for almacen in almacenes_objetivo:
                     if almacen in xls_traspasos.sheet_names:
                         df_alm = pd.read_excel(xls_traspasos, sheet_name=almacen)
-                        
                         header_idx = 0
                         for i, row in df_alm.iterrows():
                             if "N° DE PARTE" in str(row.values).upper() or "NP" in str(row.values).upper():
                                 header_idx = i
                                 break
-                        
                         if header_idx > 0:
                             df_alm = pd.read_excel(xls_traspasos, sheet_name=almacen, header=header_idx)
                         
                         for _, row in df_alm.iterrows():
-                            np_val = str(row.get('N° DE PARTE', row.get('NP', ''))).strip()
-                            if np_val in ('nan', '', 'None'): continue
+                            np_val = str(row.get('N° DE PARTE', row.get('NP', ''))).strip().upper()
+                            if np_val in ('NAN', '', 'NONE'): continue
                             
                             demanda = str(row.get('DEMANDA', '')).strip().upper()
-                            
                             try:
                                 if demanda == 'ALTA': meta = float(row.get('ALTA (1.5)', 0))
                                 elif demanda == 'MEDIA': meta = float(row.get('MEDIA (1)', 0))
                                 else: meta = float(row.get('BAJA (0)', 0))
                             except:
                                 meta = 0
-                                
                             try:
                                 existencia = float(row.get('INVENTARIO EXISTENCIA', 0))
                             except:
                                 existencia = 0
                                 
-                            # El inventario supuesto inicial es lo que debían tener según el modelo o su stock físico (lo que sea mayor)
-                            stock_inicial = max(meta, existencia)
-                            stock_rescate_modelo[(almacen, np_val)] = stock_inicial
+                            # El inventario con el que arrancan la semana (El mayor entre lo físico y la meta sugerida)
+                            stock_arranque = max(meta, existencia)
+                            inventario_virtual[(almacen.upper().strip(), np_val)] = stock_arranque
                             
-                # =========================================================================================
-                # 5. La Simulación cronológica descontando inventario virtual
-                # =========================================================================================
-                piezas_salvadas_list = []
-                cant_supuesta_dia_0 = []
+                # 3. KARDEX: Simulación Fila por Fila
+                lista_stock_sugerido = []
+                lista_entrega_supuesta = []
+                lista_fr_real = []
+                lista_fr_supuesto = []
                 
                 for idx, row in df_fill.iterrows():
-                    np_val = str(row['NP']).strip()
-                    almacen = str(row['ALMACEN']).strip()
-                    cant_sol = row['CANTIDAD SOLICITADA']
-                    cant_real_d0 = row['CANT_REAL_DIA_0']
+                    alm_key = str(row['ALMACEN']).strip().upper()
+                    np_key = str(row['NP']).strip().upper()
+                    cant_solicitada = row['CANTIDAD SOLICITADA']
+                    cant_entregada = row['CANTIDAD ENTREGADA']
                     
-                    llave = (almacen, np_val)
-                    disp_rescate = stock_rescate_modelo.get(llave, 0.0)
-                    
-                    # ¿Cuántas piezas del pedido TOTAL puede cubrir el stock que supuestamente tendríamos?
-                    cant_supuesta_modelo = min(cant_sol, disp_rescate)
-                    
-                    # Consumimos del inventario virtual las piezas simuladas
-                    if llave in stock_rescate_modelo:
-                        stock_rescate_modelo[llave] = max(0.0, stock_rescate_modelo[llave] - cant_supuesta_modelo)
-                    
-                    # El rescate aplica si lo que el Modelo pudo surtir supera a lo que realmente se entregó
-                    if cant_supuesta_modelo > cant_real_d0:
-                        piezas_salvadas = cant_supuesta_modelo - cant_real_d0
+                    # --- CÁLCULO DE FILL RATE REAL ---
+                    # Regla estricta: Solo cuenta si Fecha Solicitud == Fecha Entrega
+                    if pd.notna(row['FECHA_SOL_DT']) and pd.notna(row['FECHA_ENT_DT']) and (row['FECHA_SOL_DT'].date() == row['FECHA_ENT_DT'].date()):
+                        # Fill rate = entregada / solicitada (Topado a 1.0 por si entregan de más)
+                        fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
                     else:
-                        piezas_salvadas = 0.0
+                        fr_real = 0.0 # Entregó otro día = 0% de Fill Rate ese día
+                    
+                    # --- CÁLCULO DE SUPUESTOS (MODELO) ---
+                    llave = (alm_key, np_key)
+                    # Tomar saldo al momento de la solicitud
+                    stock_al_momento = inventario_virtual.get(llave, 0.0)
+                    
+                    # ¿Cuánto podemos cubrir con el stock que juramos tener?
+                    entrega_supuesta = min(cant_solicitada, stock_al_momento)
+                    
+                    # Calcular el Fill Rate Supuesto
+                    fr_supuesto = (entrega_supuesta / cant_solicitada) if cant_solicitada > 0 else 0.0
+                    
+                    # Almacenar métricas para esta fila
+                    lista_stock_sugerido.append(stock_al_momento)
+                    lista_entrega_supuesta.append(entrega_supuesta)
+                    lista_fr_real.append(fr_real)
+                    lista_fr_supuesto.append(fr_supuesto)
+                    
+                    # Drenar / Restar el inventario para la próxima vez que pidan esta misma pieza
+                    if llave in inventario_virtual:
+                        inventario_virtual[llave] = max(0.0, stock_al_momento - entrega_supuesta)
 
-                    piezas_salvadas_list.append(piezas_salvadas)
-                    cant_supuesta_dia_0.append(cant_real_d0 + piezas_salvadas)
-
-                # Inyectar columnas finales para mapear en Power BI
-                df_fill['PIEZAS SALVADAS POR MODELO'] = piezas_salvadas_list
-                df_fill['CANT_SUPUESTA_DIA_0'] = cant_supuesta_dia_0
+                # 4. Inyectar Nuevas Columnas a la Base
+                df_fill['STOCK SUGERIDO'] = lista_stock_sugerido
+                df_fill['ENTREGA SUPUESTA'] = lista_entrega_supuesta
+                df_fill['FILL RATE'] = lista_fr_real
+                df_fill['FILL RATE SUPUESTO'] = lista_fr_supuesto
                 
-                # Estatus definitivo para auditorías rápidas
-                df_fill['ESTATUS SUPUESTO'] = df_fill.apply(
-                    lambda x: "✅ SALVADO AL 100%" if x['PIEZAS SALVADAS POR MODELO'] == x['PIEZAS_FALTANTES_REALES'] and x['PIEZAS_FALTANTES_REALES'] > 0
-                    else ("⚠️ SALVADO PARCIAL" if x['PIEZAS SALVADAS POR MODELO'] > 0 else ("✅ BIEN (Surtido Hoy)" if x['PIEZAS_FALTANTES_REALES'] == 0 else "❌ NO SALVADO")), axis=1
-                )
+                # Limpiar columnas temporales
+                df_fill = df_fill.drop(columns=['FECHA_HORA_ORDEN', 'FECHA_SOL_DT', 'FECHA_ENT_DT'])
 
-                df_fill = df_fill.drop(columns=['FECHA_HORA_ORDEN'])
-
-                # ==========================================
-                # RENDIMIENTO ESTRICTO POR VOLUMEN DE PIEZAS
-                # ==========================================
-                total_piezas_solicitadas = df_fill['CANTIDAD SOLICITADA'].sum()
-                total_piezas_entregadas_reales = df_fill['CANT_REAL_DIA_0'].sum()
-                total_piezas_salvadas = sum(piezas_salvadas_list)
-                total_piezas_entregadas_supuesto = sum(cant_supuesta_dia_0)
+                # Renderizar KPIs rápidos para validar
+                promedio_fr_real = df_fill['FILL RATE'].mean() * 100
+                promedio_fr_sup = df_fill['FILL RATE SUPUESTO'].mean() * 100
                 
-                fr_real = (total_piezas_entregadas_reales / total_piezas_solicitadas * 100) if total_piezas_solicitadas > 0 else 0
-                fr_supuesto = (total_piezas_entregadas_supuesto / total_piezas_solicitadas * 100) if total_piezas_solicitadas > 0 else 0
-                
-                st.success(f"✅ ¡Simulación Completada! Surtido analizado sobre un universo de {int(total_piezas_solicitadas)} piezas.")
+                st.success(f"✅ ¡Kardex simulado correctamente sobre {len(df_fill)} solicitudes!")
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Fill Rate Real (Piezas)", f"{fr_real:.1f}%", f"{int(total_piezas_entregadas_reales)} pzs entregadas")
-                m2.metric("Fill Rate Supuesto", f"{fr_supuesto:.1f}%", f"+{(fr_supuesto - fr_real):.1f}% de Eficiencia")
-                m3.metric("Piezas Salvadas por tu Modelo", f"{int(total_piezas_salvadas)} piezas")
+                m1.metric("Fill Rate Real (Promedio)", f"{promedio_fr_real:.1f}%")
+                m2.metric("Fill Rate Supuesto", f"{promedio_fr_sup:.1f}%", f"+{(promedio_fr_sup - promedio_fr_real):.1f}%")
+                m3.metric("Líneas Analizadas", len(df_fill))
 
                 # Botón de Descarga para Power BI
                 buffer_bi = io.BytesIO()
                 with pd.ExcelWriter(buffer_bi, engine='openpyxl') as writer:
-                    df_fill.to_excel(writer, index=False, sheet_name='Simulacion_WhatIf_Piezas')
+                    df_fill.to_excel(writer, index=False, sheet_name='Kardex_WhatIf')
                 
                 st.download_button(
-                    label="📊 Descargar Base Lista para Power BI (Simulada por Piezas)",
+                    label="📊 Descargar Base Kardex para Power BI",
                     data=buffer_bi.getvalue(),
                     file_name=f"BASE_FILL_RATE_WHAT_IF_{fecha_corte}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
                 
-                # Tabla de visualización de Fallas vs Simulaciones
-                st.markdown("#### 🏆 Detección de Fallas y Rescates")
-                df_fallas = df_fill[df_fill['ESTATUS REAL'] == "❌ Falla Operativa"]
-                st.dataframe(df_fallas[['ALMACEN', 'NP', 'FECHA SOLICITUD (DIA/MES/AÑO)', 'FECHA ENTREGA (DIA/MES/AÑO)', 'CANTIDAD SOLICITADA', 'CANTIDAD ENTREGADA', 'CANT_REAL_DIA_0', 'PIEZAS_FALTANTES_REALES', 'PIEZAS SALVADAS POR MODELO', 'ESTATUS SUPUESTO']].head(50))
+                # Tabla de visualización EXACTA como la pediste para comprobar
+                st.markdown("#### 🏆 Vista de Consumo del Kardex (Fila por Fila)")
+                cols_mostrar = ['ALMACEN', 'NP', 'FECHA SOLICITUD (DIA/MES/AÑO)', 'FECHA ENTREGA (DIA/MES/AÑO)', 'CANTIDAD SOLICITADA', 'CANTIDAD ENTREGADA', 'STOCK SUGERIDO', 'ENTREGA SUPUESTA', 'FILL RATE', 'FILL RATE SUPUESTO']
+                st.dataframe(df_fill[cols_mostrar].head(30))
                 
             except Exception as e:
                 st.error(f"❌ Ocurrió un error en la simulación: {e}")
