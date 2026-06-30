@@ -220,10 +220,10 @@ def show():
 
     st.markdown("---")
     # ==========================================
-    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX DINÁMICO REGLA DE TIEMPO)
+    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX DINÁMICO REGLA TIEMPO + VOLUMEN)
     # ==========================================
     st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos Inteligente)")
-    st.info("Solo se evaluará el rescate en las solicitudes donde la Fecha de Entrega superó la de Solicitud (Entregas Tardías).")
+    st.info("El Modelo solo intervendrá si detecta una falla operativa (Entrega Tardía o Entrega Incompleta).")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -238,7 +238,7 @@ def show():
             st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
             return
             
-        with st.spinner("🧠 Evaluando entregas tardías y reconstruyendo Kardex..."):
+        with st.spinner("🧠 Evaluando fallas de tiempo y volumen para reconstruir el Kardex..."):
             try:
                 # 1. Cargar Fill Rate y crear línea de tiempo
                 df_fill = pd.read_excel(archivo_fill_rate)
@@ -314,7 +314,7 @@ def show():
                             inventario_virtual[(alm_limpio, np_val)] = stock_arranque
 
                 # =========================================================
-                # 3. KARDEX CON REGLA ESTRICTA DE TIEMPO
+                # 3. KARDEX CON REGLA ESTRICTA DE TIEMPO Y VOLUMEN
                 # =========================================================
                 lista_stock_sugerido = []
                 lista_entrega_supuesta = []
@@ -330,37 +330,53 @@ def show():
                     llave = (alm_key, np_key)
                     stock_al_momento = inventario_virtual.get(llave, 0.0)
 
-                    # Comprobar la regla de oro: ¿Fecha Entrega > Fecha Solicitud?
+                    # ----------------------------------------------------
+                    # PASO A: Evaluar condiciones de falla operativa
+                    # ----------------------------------------------------
                     entregado_tarde = False
                     if pd.notna(row['FECHA_SOL_DT']) and pd.notna(row['FECHA_ENT_DT']):
                         if row['FECHA_ENT_DT'].date() > row['FECHA_SOL_DT'].date():
                             entregado_tarde = True
+                            
+                    entregado_incompleto = cant_solicitada > cant_entregada
+                    
+                    falla_operativa = entregado_tarde or entregado_incompleto
                     
                     # Guardar siempre la foto del stock sugerido al momento del evento
                     lista_stock_sugerido.append(stock_al_momento)
 
-                    if entregado_tarde:
-                        # ❌ FALLAMOS EN EL TIEMPO: Entra el Análisis What-If
-                        fr_real = 0.0 
-                        entrega_supuesta = min(cant_solicitada, stock_al_momento)
+                    # ----------------------------------------------------
+                    # PASO B: Aplicar Rescate o Respetar Realidad
+                    # ----------------------------------------------------
+                    if falla_operativa:
+                        # ❌ FALLAMOS: Entra el Análisis What-If
+                        if entregado_tarde:
+                            entregado_realmente_hoy = 0.0
+                            fr_real = 0.0 
+                        else:
+                            entregado_realmente_hoy = cant_entregada
+                            fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
+                            
+                        # El rescate: Simulamos usar el stock virtual para cubrir lo solicitado.
+                        # Pero siempre respetamos lo que SÍ se logró entregar realmente hoy.
+                        entrega_supuesta = max(entregado_realmente_hoy, min(cant_solicitada, stock_al_momento))
                         fr_supuesto = (entrega_supuesta / cant_solicitada) if cant_solicitada > 0 else 0.0
                         
-                        # Drenamos del Kardex Virtual la cantidad que el modelo usó para rescatar
+                        # Drenamos del Kardex Virtual la cantidad total que usamos hoy
                         if llave in inventario_virtual:
                             inventario_virtual[llave] = max(0.0, stock_al_momento - entrega_supuesta)
                             
                     else:
-                        # ✅ ENTREGADO EL MISMO DÍA: No intervenimos, copiamos tal cual
+                        # ✅ ENTREGADO A TIEMPO Y COMPLETO: Copiamos tal cual
                         fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
                         entrega_supuesta = cant_entregada
                         fr_supuesto = fr_real
                         
                         # Drenamos del Kardex Virtual lo que físicamente SÍ entregaron
-                        # para que el Kardex vaya cuadrado a la realidad
                         if llave in inventario_virtual:
                             inventario_virtual[llave] = max(0.0, stock_al_momento - cant_entregada)
 
-                    # Guardar resultados
+                    # Guardar resultados en las listas
                     lista_entrega_supuesta.append(entrega_supuesta)
                     lista_fr_real.append(fr_real)
                     lista_fr_supuesto.append(fr_supuesto)
@@ -376,7 +392,7 @@ def show():
                 promedio_fr_real = df_fill['FILL RATE'].mean() * 100
                 promedio_fr_sup = df_fill['FILL RATE SUPUESTO'].mean() * 100
                 
-                st.success(f"✅ ¡Kardex simulado correctamente! Evaluación aplicada únicamente a las entregas tardías.")
+                st.success(f"✅ ¡Kardex simulado correctamente! Evaluando únicamente fallas de tiempo y volumen.")
                 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Fill Rate Real (Promedio)", f"{promedio_fr_real:.1f}%")
