@@ -220,10 +220,10 @@ def show():
 
     st.markdown("---")
     # ==========================================
-    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX DINÁMICO)
+    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX DINÁMICO REGLA DE TIEMPO)
     # ==========================================
     st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos Inteligente)")
-    st.info("Busca dinámicamente las hojas en el excel de traspasos cruzando con la columna ALMACÉN y simula el consumo del stock.")
+    st.info("Solo se evaluará el rescate en las solicitudes donde la Fecha de Entrega superó la de Solicitud (Entregas Tardías).")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -238,7 +238,7 @@ def show():
             st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
             return
             
-        with st.spinner("🧠 Leyendo pestañas dinámicamente y construyendo el Kardex..."):
+        with st.spinner("🧠 Evaluando entregas tardías y reconstruyendo Kardex..."):
             try:
                 # 1. Cargar Fill Rate y crear línea de tiempo
                 df_fill = pd.read_excel(archivo_fill_rate)
@@ -262,18 +262,16 @@ def show():
                 df_fill = df_fill.sort_values('FECHA_HORA_ORDEN')
 
                 # =========================================================
-                # 2. CARGA INTELIGENTE DE TRASPASOS (AQUÍ ESTABA EL SECRETO)
+                # 2. CARGA INTELIGENTE DE TRASPASOS
                 # =========================================================
                 inventario_virtual = {}
                 xls_traspasos = pd.ExcelFile(archivo_traspasos)
                 
-                # Obtenemos TODOS los almacenes que realmente existen en el Fill Rate
                 almacenes_en_fill_rate = df_fill['ALMACEN'].dropna().unique()
                 
                 for almacen_fr in almacenes_en_fill_rate:
                     alm_limpio = str(almacen_fr).strip().upper()
                     
-                    # Buscamos qué hoja del excel hace match (ignorando espacios escondidos)
                     hoja_encontrada = None
                     for sheet in xls_traspasos.sheet_names:
                         if sheet.strip().upper() == alm_limpio:
@@ -281,7 +279,6 @@ def show():
                             break
                             
                     if hoja_encontrada:
-                        # Leemos la hoja sin formato para detectar los verdaderos encabezados
                         df_raw = pd.read_excel(xls_traspasos, sheet_name=hoja_encontrada, header=None)
                         header_idx = 0
                         for i, r in df_raw.iterrows():
@@ -289,13 +286,9 @@ def show():
                                 header_idx = i
                                 break
                                 
-                        # Ahora sí, leemos con el encabezado correcto
                         df_alm = pd.read_excel(xls_traspasos, sheet_name=hoja_encontrada, header=header_idx)
-                        
-                        # MEGA BLINDAJE: Limpiamos los nombres de las columnas para evitar espacios (Ej. "ALTA (1.5) ")
                         df_alm.columns = [str(c).strip().upper() for c in df_alm.columns]
                         
-                        # Extraer NP dinámicamente
                         col_np = 'N° DE PARTE' if 'N° DE PARTE' in df_alm.columns else ('NP' if 'NP' in df_alm.columns else None)
                         if not col_np: continue
                         
@@ -317,14 +310,11 @@ def show():
                             except:
                                 existencia = 0
                                 
-                            # Arrancamos con lo sugerido o con lo que ya tenían, lo mayor
                             stock_arranque = max(meta, existencia)
-                            
-                            # Lo guardamos con el nombre LIMPIO para que el Kardex lo encuentre perfecto
                             inventario_virtual[(alm_limpio, np_val)] = stock_arranque
 
                 # =========================================================
-                # 3. KARDEX: Simulación Fila por Fila
+                # 3. KARDEX CON REGLA ESTRICTA DE TIEMPO
                 # =========================================================
                 lista_stock_sugerido = []
                 lista_entrega_supuesta = []
@@ -337,27 +327,43 @@ def show():
                     cant_solicitada = row['CANTIDAD SOLICITADA']
                     cant_entregada = row['CANTIDAD ENTREGADA']
                     
-                    # --- CÁLCULO DE FILL RATE REAL ---
-                    if pd.notna(row['FECHA_SOL_DT']) and pd.notna(row['FECHA_ENT_DT']) and (row['FECHA_SOL_DT'].date() == row['FECHA_ENT_DT'].date()):
-                        fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
-                    else:
-                        fr_real = 0.0 
-                    
-                    # --- CÁLCULO DE SUPUESTOS (MODELO) ---
                     llave = (alm_key, np_key)
                     stock_al_momento = inventario_virtual.get(llave, 0.0)
+
+                    # Comprobar la regla de oro: ¿Fecha Entrega > Fecha Solicitud?
+                    entregado_tarde = False
+                    if pd.notna(row['FECHA_SOL_DT']) and pd.notna(row['FECHA_ENT_DT']):
+                        if row['FECHA_ENT_DT'].date() > row['FECHA_SOL_DT'].date():
+                            entregado_tarde = True
                     
-                    entrega_supuesta = min(cant_solicitada, stock_al_momento)
-                    fr_supuesto = (entrega_supuesta / cant_solicitada) if cant_solicitada > 0 else 0.0
-                    
+                    # Guardar siempre la foto del stock sugerido al momento del evento
                     lista_stock_sugerido.append(stock_al_momento)
+
+                    if entregado_tarde:
+                        # ❌ FALLAMOS EN EL TIEMPO: Entra el Análisis What-If
+                        fr_real = 0.0 
+                        entrega_supuesta = min(cant_solicitada, stock_al_momento)
+                        fr_supuesto = (entrega_supuesta / cant_solicitada) if cant_solicitada > 0 else 0.0
+                        
+                        # Drenamos del Kardex Virtual la cantidad que el modelo usó para rescatar
+                        if llave in inventario_virtual:
+                            inventario_virtual[llave] = max(0.0, stock_al_momento - entrega_supuesta)
+                            
+                    else:
+                        # ✅ ENTREGADO EL MISMO DÍA: No intervenimos, copiamos tal cual
+                        fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
+                        entrega_supuesta = cant_entregada
+                        fr_supuesto = fr_real
+                        
+                        # Drenamos del Kardex Virtual lo que físicamente SÍ entregaron
+                        # para que el Kardex vaya cuadrado a la realidad
+                        if llave in inventario_virtual:
+                            inventario_virtual[llave] = max(0.0, stock_al_momento - cant_entregada)
+
+                    # Guardar resultados
                     lista_entrega_supuesta.append(entrega_supuesta)
                     lista_fr_real.append(fr_real)
                     lista_fr_supuesto.append(fr_supuesto)
-                    
-                    # Drenado exacto de Kardex
-                    if llave in inventario_virtual:
-                        inventario_virtual[llave] = max(0.0, stock_al_momento - entrega_supuesta)
 
                 # 4. Inyectar Nuevas Columnas a la Base
                 df_fill['STOCK SUGERIDO'] = lista_stock_sugerido
@@ -370,7 +376,7 @@ def show():
                 promedio_fr_real = df_fill['FILL RATE'].mean() * 100
                 promedio_fr_sup = df_fill['FILL RATE SUPUESTO'].mean() * 100
                 
-                st.success(f"✅ ¡Kardex simulado correctamente! Vinculación dinámica completada.")
+                st.success(f"✅ ¡Kardex simulado correctamente! Evaluación aplicada únicamente a las entregas tardías.")
                 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Fill Rate Real (Promedio)", f"{promedio_fr_real:.1f}%")
