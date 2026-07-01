@@ -220,10 +220,10 @@ def show():
 
     st.markdown("---")
     # ==========================================
-    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX VIRTUAL ROW-BY-ROW)
+    # SECCIÓN 3: SIMULADOR WHAT-IF (KARDEX DINÁMICO REGLA TIEMPO + VOLUMEN)
     # ==========================================
-    st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos fila por fila)")
-    st.info("Visualiza el consumo del stock paso a paso. Perfecto para auditar el desempeño del modelo en Power BI.")
+    st.markdown("### 🔮 3. Análisis What-If (Simulador de Traspasos Inteligente)")
+    st.info("El Modelo solo intervendrá si detecta una falla operativa (Entrega Tardía o Entrega Incompleta).")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -238,21 +238,20 @@ def show():
             st.warning("⚠️ Necesitas cargar ambos archivos para realizar la simulación.")
             return
             
-        with st.spinner("🧠 Reconstruyendo la línea de tiempo y descontando el inventario..."):
+        with st.spinner("🧠 Evaluando fallas de tiempo y volumen para reconstruir el Kardex..."):
             try:
-                # 1. Cargar Fill Rate y crear línea de tiempo cronológica
+                # 1. Cargar Fill Rate y crear línea de tiempo
                 df_fill = pd.read_excel(archivo_fill_rate)
                 df_fill['FECHA_SOL_DT'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'], errors='coerce')
                 df_fill['FECHA_ENT_DT'] = pd.to_datetime(df_fill['FECHA ENTREGA (DIA/MES/AÑO)'], errors='coerce')
                 
-                # Crear clave cronológica para procesar fila por fila de forma ordenada
                 df_fill['FECHA_HORA_ORDEN'] = pd.to_datetime(df_fill['FECHA SOLICITUD (DIA/MES/AÑO)'].astype(str) + ' ' + df_fill['HORA SOLICITUD'].astype(str), errors='coerce')
                 df_fill = df_fill.dropna(subset=['FECHA_HORA_ORDEN']) 
                 
                 df_fill['CANTIDAD SOLICITADA'] = pd.to_numeric(df_fill['CANTIDAD SOLICITADA'], errors='coerce').fillna(0).astype(float)
                 df_fill['CANTIDAD ENTREGADA'] = pd.to_numeric(df_fill['CANTIDAD ENTREGADA'], errors='coerce').fillna(0).astype(float)
                 
-                # Filtro de fecha para evaluar lo que pasó después del sábado de reporte
+                # Filtro de fecha
                 fecha_corte = pd.to_datetime(fecha_reporte).date()
                 df_fill = df_fill[df_fill['FECHA_HORA_ORDEN'].dt.date > fecha_corte].copy()
                 
@@ -260,52 +259,63 @@ def show():
                     st.error("❌ No hay solicitudes posteriores a la fecha seleccionada.")
                     return
 
-                # ORDEN CRONOLÓGICO INDISPENSABLE PARA DRENAR STOCK
                 df_fill = df_fill.sort_values('FECHA_HORA_ORDEN')
 
-                # 2. Cargar Base de Traspasos (Meta de Stock del Modelo)
+                # =========================================================
+                # 2. CARGA INTELIGENTE DE TRASPASOS
+                # =========================================================
                 inventario_virtual = {}
                 xls_traspasos = pd.ExcelFile(archivo_traspasos)
                 
-                almacenes_objetivo = [
-                    "ALM. LIPU", "ALM. MYM", "ALM. UTEP", "ALM. UTEP SAN LUIS", 
-                    "ALMACEN AFN", "BISONTE SLP", "BISONTE TEPOTZOTLAN", 
-                    "CULVERT", "IDEALEASE", "TDR", "TUMSA"
-                ]
-
-                # Leer inventario sugerido pestaña por pestaña
-                for almacen in almacenes_objetivo:
-                    if almacen in xls_traspasos.sheet_names:
-                        df_alm = pd.read_excel(xls_traspasos, sheet_name=almacen)
+                almacenes_en_fill_rate = df_fill['ALMACEN'].dropna().unique()
+                
+                for almacen_fr in almacenes_en_fill_rate:
+                    alm_limpio = str(almacen_fr).strip().upper()
+                    
+                    hoja_encontrada = None
+                    for sheet in xls_traspasos.sheet_names:
+                        if sheet.strip().upper() == alm_limpio:
+                            hoja_encontrada = sheet
+                            break
+                            
+                    if hoja_encontrada:
+                        df_raw = pd.read_excel(xls_traspasos, sheet_name=hoja_encontrada, header=None)
                         header_idx = 0
-                        for i, row in df_alm.iterrows():
-                            if "N° DE PARTE" in str(row.values).upper() or "NP" in str(row.values).upper():
+                        for i, r in df_raw.iterrows():
+                            if "N° DE PARTE" in str(r.values).upper() or "NP" in str(r.values).upper():
                                 header_idx = i
                                 break
-                        if header_idx > 0:
-                            df_alm = pd.read_excel(xls_traspasos, sheet_name=almacen, header=header_idx)
+                                
+                        df_alm = pd.read_excel(xls_traspasos, sheet_name=hoja_encontrada, header=header_idx)
+                        df_alm.columns = [str(c).strip().upper() for c in df_alm.columns]
                         
-                        for _, row in df_alm.iterrows():
-                            np_val = str(row.get('N° DE PARTE', row.get('NP', ''))).strip().upper()
+                        col_np = 'N° DE PARTE' if 'N° DE PARTE' in df_alm.columns else ('NP' if 'NP' in df_alm.columns else None)
+                        if not col_np: continue
+                        
+                        for _, r in df_alm.iterrows():
+                            np_val = str(r[col_np]).strip().upper()
                             if np_val in ('NAN', '', 'NONE'): continue
                             
-                            demanda = str(row.get('DEMANDA', '')).strip().upper()
+                            demanda = str(r.get('DEMANDA', '')).strip().upper()
+                            
                             try:
-                                if demanda == 'ALTA': meta = float(row.get('ALTA (1.5)', 0))
-                                elif demanda == 'MEDIA': meta = float(row.get('MEDIA (1)', 0))
-                                else: meta = float(row.get('BAJA (0)', 0))
+                                if demanda == 'ALTA': meta = float(r.get('ALTA (1.5)', 0))
+                                elif demanda == 'MEDIA': meta = float(r.get('MEDIA (1)', 0))
+                                else: meta = float(r.get('BAJA (0)', 0))
                             except:
                                 meta = 0
+                                
                             try:
-                                existencia = float(row.get('INVENTARIO EXISTENCIA', 0))
+                                existencia = float(r.get('INVENTARIO EXISTENCIA', 0))
                             except:
                                 existencia = 0
                                 
-                            # El inventario con el que arrancan la semana (El mayor entre lo físico y la meta sugerida)
                             stock_arranque = max(meta, existencia)
-                            inventario_virtual[(almacen.upper().strip(), np_val)] = stock_arranque
-                            
-                # 3. KARDEX: Simulación Fila por Fila
+                            inventario_virtual[(alm_limpio, np_val)] = stock_arranque
+
+                # =========================================================
+                # 3. KARDEX CON REGLA ESTRICTA DE TIEMPO Y VOLUMEN
+                # =========================================================
                 lista_stock_sugerido = []
                 lista_entrega_supuesta = []
                 lista_fr_real = []
@@ -317,34 +327,59 @@ def show():
                     cant_solicitada = row['CANTIDAD SOLICITADA']
                     cant_entregada = row['CANTIDAD ENTREGADA']
                     
-                    # --- CÁLCULO DE FILL RATE REAL ---
-                    # Regla estricta: Solo cuenta si Fecha Solicitud == Fecha Entrega
-                    if pd.notna(row['FECHA_SOL_DT']) and pd.notna(row['FECHA_ENT_DT']) and (row['FECHA_SOL_DT'].date() == row['FECHA_ENT_DT'].date()):
-                        # Fill rate = entregada / solicitada (Topado a 1.0 por si entregan de más)
-                        fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
-                    else:
-                        fr_real = 0.0 # Entregó otro día = 0% de Fill Rate ese día
-                    
-                    # --- CÁLCULO DE SUPUESTOS (MODELO) ---
                     llave = (alm_key, np_key)
-                    # Tomar saldo al momento de la solicitud
                     stock_al_momento = inventario_virtual.get(llave, 0.0)
+
+                    # ----------------------------------------------------
+                    # PASO A: Evaluar condiciones de falla operativa
+                    # ----------------------------------------------------
+                    entregado_tarde = False
+                    if pd.notna(row['FECHA_SOL_DT']) and pd.notna(row['FECHA_ENT_DT']):
+                        if row['FECHA_ENT_DT'].date() > row['FECHA_SOL_DT'].date():
+                            entregado_tarde = True
+                            
+                    entregado_incompleto = cant_solicitada > cant_entregada
                     
-                    # ¿Cuánto podemos cubrir con el stock que juramos tener?
-                    entrega_supuesta = min(cant_solicitada, stock_al_momento)
+                    falla_operativa = entregado_tarde or entregado_incompleto
                     
-                    # Calcular el Fill Rate Supuesto
-                    fr_supuesto = (entrega_supuesta / cant_solicitada) if cant_solicitada > 0 else 0.0
-                    
-                    # Almacenar métricas para esta fila
+                    # Guardar siempre la foto del stock sugerido al momento del evento
                     lista_stock_sugerido.append(stock_al_momento)
+
+                    # ----------------------------------------------------
+                    # PASO B: Aplicar Rescate o Respetar Realidad
+                    # ----------------------------------------------------
+                    if falla_operativa:
+                        # ❌ FALLAMOS: Entra el Análisis What-If
+                        if entregado_tarde:
+                            entregado_realmente_hoy = 0.0
+                            fr_real = 0.0 
+                        else:
+                            entregado_realmente_hoy = cant_entregada
+                            fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
+                            
+                        # El rescate: Simulamos usar el stock virtual para cubrir lo solicitado.
+                        # Pero siempre respetamos lo que SÍ se logró entregar realmente hoy.
+                        entrega_supuesta = max(entregado_realmente_hoy, min(cant_solicitada, stock_al_momento))
+                        fr_supuesto = (entrega_supuesta / cant_solicitada) if cant_solicitada > 0 else 0.0
+                        
+                        # Drenamos del Kardex Virtual la cantidad total que usamos hoy
+                        if llave in inventario_virtual:
+                            inventario_virtual[llave] = max(0.0, stock_al_momento - entrega_supuesta)
+                            
+                    else:
+                        # ✅ ENTREGADO A TIEMPO Y COMPLETO: Copiamos tal cual
+                        fr_real = min((cant_entregada / cant_solicitada), 1.0) if cant_solicitada > 0 else 0.0
+                        entrega_supuesta = cant_entregada
+                        fr_supuesto = fr_real
+                        
+                        # Drenamos del Kardex Virtual lo que físicamente SÍ entregaron
+                        if llave in inventario_virtual:
+                            inventario_virtual[llave] = max(0.0, stock_al_momento - cant_entregada)
+
+                    # Guardar resultados en las listas
                     lista_entrega_supuesta.append(entrega_supuesta)
                     lista_fr_real.append(fr_real)
                     lista_fr_supuesto.append(fr_supuesto)
-                    
-                    # Drenar / Restar el inventario para la próxima vez que pidan esta misma pieza
-                    if llave in inventario_virtual:
-                        inventario_virtual[llave] = max(0.0, stock_al_momento - entrega_supuesta)
 
                 # 4. Inyectar Nuevas Columnas a la Base
                 df_fill['STOCK SUGERIDO'] = lista_stock_sugerido
@@ -352,21 +387,18 @@ def show():
                 df_fill['FILL RATE'] = lista_fr_real
                 df_fill['FILL RATE SUPUESTO'] = lista_fr_supuesto
                 
-                # Limpiar columnas temporales
                 df_fill = df_fill.drop(columns=['FECHA_HORA_ORDEN', 'FECHA_SOL_DT', 'FECHA_ENT_DT'])
 
-                # Renderizar KPIs rápidos para validar
                 promedio_fr_real = df_fill['FILL RATE'].mean() * 100
                 promedio_fr_sup = df_fill['FILL RATE SUPUESTO'].mean() * 100
                 
-                st.success(f"✅ ¡Kardex simulado correctamente sobre {len(df_fill)} solicitudes!")
+                st.success(f"✅ ¡Kardex simulado correctamente! Evaluando únicamente fallas de tiempo y volumen.")
                 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Fill Rate Real (Promedio)", f"{promedio_fr_real:.1f}%")
                 m2.metric("Fill Rate Supuesto", f"{promedio_fr_sup:.1f}%", f"+{(promedio_fr_sup - promedio_fr_real):.1f}%")
                 m3.metric("Líneas Analizadas", len(df_fill))
 
-                # Botón de Descarga para Power BI
                 buffer_bi = io.BytesIO()
                 with pd.ExcelWriter(buffer_bi, engine='openpyxl') as writer:
                     df_fill.to_excel(writer, index=False, sheet_name='Kardex_WhatIf')
@@ -379,7 +411,6 @@ def show():
                     type="primary"
                 )
                 
-                # Tabla de visualización EXACTA como la pediste para comprobar
                 st.markdown("#### 🏆 Vista de Consumo del Kardex (Fila por Fila)")
                 cols_mostrar = ['ALMACEN', 'NP', 'FECHA SOLICITUD (DIA/MES/AÑO)', 'FECHA ENTREGA (DIA/MES/AÑO)', 'CANTIDAD SOLICITADA', 'CANTIDAD ENTREGADA', 'STOCK SUGERIDO', 'ENTREGA SUPUESTA', 'FILL RATE', 'FILL RATE SUPUESTO']
                 st.dataframe(df_fill[cols_mostrar].head(30))
