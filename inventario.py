@@ -14,7 +14,7 @@ def show():
     # ======================================================
     ALMACENES_POR_SUCURSAL = {
         "CUAUTITLAN": [
-            "ALM. GENERAL", "ALM. LIPU", "ALM. MYM", "Alm. Utep", "ALM. UTEP SAN LUIS", "ALM. FAST FOOD", "ALM. BOÑAR"
+            "ALM. GENERAL", "ALM. LIPU", "ALM. MYM", "Alm. Utep", "ALM. UTEP SAN LUIS", "ALM. FAST FOOD", "ALM. BOÑAR", "ALM. CONSIGNA TMS"
         ],
         "TULTITLAN": [
             "ALM. GENERAL", "TUMSA", "BISONTE TEPOTZOTLAN", "BISONTE SLP", "TEISA", "CULVERT", "TDR", "ALMACEN AFN", "ZONTE", "ALM. ENLACES LOGISTICOS"
