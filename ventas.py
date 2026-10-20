@@ -358,7 +358,7 @@ def show():
                     df_final.loc[mask_leonela, "SUCURSAL"] = "TULTITLAN"
                     
                     # 2. Regla: Juan Pablo y Daniela -> BAJIO
-                    vendedores_bajio = ["JUAN PABLO RODRIGUEZ LOREDO", "DANIELA OLGUIN MARTINEZ", "DAVID ULISES CASTRO ROJAS", "JOEL VEGA SANCHEZ"]
+                    vendedores_bajio = ["JUAN PABLO RODRIGUEZ LOREDO", "DANIELA OLGUIN MARTINEZ", "DAVID ULISES CASTRO ROJAS", "JOEL VEGA SANCHEZ", "VICTOR GARCIA RAMOS"]
                     mask_vendedores_bajio = df_final["VENDEDOR"].isin(vendedores_bajio)
                     df_final.loc[mask_vendedores_bajio, "SUCURSAL"] = "BAJIO"
                     
